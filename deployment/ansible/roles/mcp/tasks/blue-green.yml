@@ -84,6 +84,7 @@
     mode: "0640"
   vars:
     mcp_image: "{{ mcp_candidate_image }}"
+    mcp_scheduler_image: "{{ mcp_candidate_image }}"
     mcp_previous_image: "{{ mcp_previous_image }}"
     mcp_candidate_slot: "{{ mcp_candidate_slot }}"
     mcp_proxy_image: "{{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
@@ -149,12 +150,24 @@
   changed_when: true
   when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
 
+- name: Render the candidate image override for the migration run
+  ansible.builtin.template:
+    src: migration-compose.yml.j2
+    dest: "{{ remote_root }}/mcp/migration-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  when: mcp_operation | default('deploy') == 'deploy'
+
 - name: Run catalog migrations once from the immutable candidate image
   ansible.builtin.command:
     cmd: >-
-      docker run --rm --network data_default
+      docker compose --project-name ford-mcp
       --env-file "{{ remote_root }}/mcp/.env"
-      "{{ mcp_candidate_image }}" node dist/src/cli.js migrate
+      -f "{{ remote_root }}/mcp/compose.yml"
+      -f "{{ remote_root }}/mcp/migration-compose.yml"
+      run --rm --no-deps mcp node dist/src/cli.js migrate
+  no_log: true
   changed_when: true
   when: mcp_operation | default('deploy') == 'deploy'
 
@@ -283,6 +296,15 @@
 
 - name: Switch stable MCP proxy and verify the route
   block:
+    - name: Start or update the monthly scraper scheduler candidate
+      ansible.builtin.command:
+        cmd: >-
+          docker compose --project-name ford-mcp
+          --env-file "{{ remote_root }}/mcp/.env"
+          -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+          up -d --wait scheduler
+      changed_when: true
+
     - name: Stop the legacy MCP container before binding the stable listener
       ansible.builtin.command:
         cmd: docker stop "{{ mcp_legacy_listener.stdout_lines[0] }}"
@@ -341,6 +363,44 @@
   rescue:
     - name: Restore prior MCP route after failed smoke
       block:
+        - name: Restore the prior scheduler image in Compose
+          ansible.builtin.template:
+            src: blue-green-compose.yml.j2
+            dest: "{{ remote_root }}/mcp/blue-green-compose.yml"
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0640"
+          vars:
+            mcp_image: "{{ mcp_candidate_image }}"
+            mcp_scheduler_image: "{{ mcp_current_image }}"
+            mcp_candidate_slot: "{{ mcp_candidate_slot }}"
+            mcp_proxy_image: "{{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
+            mcp_blue_port: "{{ mcp_blue_port | default(3101) }}"
+            mcp_green_port: "{{ mcp_green_port | default(3102) }}"
+          when: mcp_current_image | length > 0
+          no_log: true
+
+        - name: Restore the prior scheduler service
+          ansible.builtin.command:
+            cmd: >-
+              docker compose --project-name ford-mcp
+              --env-file "{{ remote_root }}/mcp/.env"
+              -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+              up -d --wait scheduler
+          when: mcp_current_image | length > 0
+          changed_when: true
+
+        - name: Stop the scheduler when no prior MCP release existed
+          ansible.builtin.command:
+            cmd: >-
+              docker compose --project-name ford-mcp
+              --env-file "{{ remote_root }}/mcp/.env"
+              -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+              stop scheduler
+          when: mcp_current_image | length == 0
+          changed_when: true
+          failed_when: false
+
         - name: Restore prior MCP release state when present
           ansible.builtin.copy:
             dest: "{{ remote_root }}/mcp/active-release.json"
