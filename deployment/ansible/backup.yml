@@ -1,0 +1,7 @@
+---
+- name: Configure Object Storage backups on emme-2
+  hosts: data
+  become: true
+  tags: [backup]
+  roles:
+    - backup

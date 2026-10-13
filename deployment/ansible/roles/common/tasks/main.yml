@@ -1,0 +1,71 @@
+---
+- name: Check whether the Docker CLI is installed
+  ansible.builtin.command: docker --version
+  become: false
+  register: docker_version
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker repository on Oracle Linux 9
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+    owner: root
+    group: root
+    mode: "0644"
+  when: docker_version.rc != 0 and ansible_facts.distribution == 'OracleLinux' and ansible_facts.distribution_major_version == '9'
+
+- name: Install Docker CE and Compose v2
+  ansible.builtin.dnf:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+  when: docker_version.rc != 0
+
+- name: Add deployment user to docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  when: docker_version.rc != 0
+
+- name: Refresh SSH connection after Docker group change
+  ansible.builtin.meta: reset_connection
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+  when: docker_version.rc != 0
+
+- name: Verify Docker Compose v2 is installed
+  ansible.builtin.command: docker compose version --short
+  become: false
+  register: compose_version
+  changed_when: false
+
+- name: Create deployment root
+  ansible.builtin.file:
+    path: "{{ remote_root }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+
+- name: Create application and data directories
+  ansible.builtin.file:
+    path: "{{ remote_root }}/{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+  loop:
+    - app
+    - data
+    - backup

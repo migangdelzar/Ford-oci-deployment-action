@@ -1,0 +1,72 @@
+name: OCI blue-green deploy
+description: Deploy or roll back Ford Service or MCP on its existing OCI VM.
+inputs:
+  target:
+    description: Deployment target (ford-service or ford-mcp).
+    required: true
+  image:
+    description: Immutable GHCR digest for deploy. Rollback resolves the recorded prior digest.
+    required: false
+  operation:
+    description: deploy or rollback.
+    required: false
+    default: deploy
+  source-sha:
+    description: Verified source commit for deploy, or recorded-rollback for operator rollback.
+    required: true
+  host:
+    description: SSH host for the existing VM.
+    required: true
+  user:
+    description: SSH user for the existing VM.
+    required: true
+  ssh-private-key:
+    description: SSH private key for the target VM (emme-1 for Ford Service, emme-2 for MCP).
+    required: true
+  backup-ssh-private-key:
+    description: Separate SSH private key for the existing data VM backup before Ford Service deploys.
+    required: false
+  ssh-known-hosts:
+    description: Pinned known_hosts entries for the deployment host and, when needed, the data VM.
+    required: true
+  registry-username:
+    description: GHCR username associated with the short-lived package token.
+    required: true
+  registry-token:
+    description: Short-lived GHCR token with packages:read.
+    required: true
+  remote-root:
+    description: Provisioned deployment directory on the VM.
+    required: false
+    default: /opt/ford
+  backup-host:
+    description: Existing data VM host to back up before deploying Ford Service; also the MCP target host.
+    required: false
+  backup-user:
+    description: SSH user for the data VM; defaults to the deployment user.
+    required: false
+  mcp-private-ip:
+    description: Existing MCP VM private IP used in the stable listener configuration.
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Deploy through the shared Ansible playbook
+      shell: bash
+      env:
+        OCI_TARGET: ${{ inputs.target }}
+        OCI_IMAGE: ${{ inputs.image }}
+        OCI_OPERATION: ${{ inputs.operation }}
+        OCI_SOURCE_SHA: ${{ inputs['source-sha'] }}
+        OCI_DEPLOY_HOST: ${{ inputs.host }}
+        OCI_DEPLOY_USER: ${{ inputs.user }}
+        OCI_SSH_PRIVATE_KEY: ${{ inputs['ssh-private-key'] }}
+        OCI_BACKUP_SSH_PRIVATE_KEY: ${{ inputs['backup-ssh-private-key'] }}
+        OCI_SSH_KNOWN_HOSTS: ${{ inputs['ssh-known-hosts'] }}
+        OCI_REGISTRY_USERNAME: ${{ inputs['registry-username'] }}
+        GHCR_TOKEN: ${{ inputs['registry-token'] }}
+        OCI_REMOTE_ROOT: ${{ inputs['remote-root'] }}
+        OCI_BACKUP_HOST: ${{ inputs['backup-host'] }}
+        OCI_BACKUP_USER: ${{ inputs['backup-user'] }}
+        OCI_MCP_PRIVATE_IP: ${{ inputs['mcp-private-ip'] }}
+      run: ${{ github.action_path }}/deploy.sh

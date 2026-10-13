@@ -1,0 +1,30 @@
+services:
+  ford-service-blue:
+    image: {{ app_image if app_candidate_slot == 'blue' else app_previous_image }}
+    container_name: ford-service-blue
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:{{ app_blue_port }}:8080"
+    networks: [app_default]
+
+  ford-service-green:
+    image: {{ app_image if app_candidate_slot == 'green' else app_previous_image }}
+    container_name: ford-service-green
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:{{ app_green_port }}:8080"
+    networks: [app_default]
+
+  app-proxy:
+    image: {{ app_proxy_image }}
+    container_name: ford-service-proxy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./proxy.conf:/etc/nginx/conf.d/default.conf:ro
+
+networks:
+  app_default:
+    external: true

@@ -1,0 +1,89 @@
+---
+- name: Verify the public Ford MCP endpoint
+  hosts: app
+  gather_facts: false
+  tasks:
+    - name: Initialize MCP through Cloudflare
+      ansible.builtin.uri:
+        url: https://ford-mcp.emme.business/mcp
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
+          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
+          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Host: ford-mcp.emme.business
+          Accept: application/json, text/event-stream
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: initialize
+          params:
+            protocolVersion: "2025-03-26"
+            capabilities: {}
+            clientInfo:
+              name: deployment-public-smoke
+              version: "1"
+        status_code: 200
+        return_content: true
+        timeout: 20
+      register: mcp_public_initialize
+      no_log: true
+
+    - name: Verify public MCP tools/list
+      ansible.builtin.uri:
+        url: https://ford-mcp.emme.business/mcp
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
+          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
+          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Host: ford-mcp.emme.business
+          Accept: application/json, text/event-stream
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 2
+          method: tools/list
+          params: {}
+        status_code: 200
+        return_content: true
+        timeout: 20
+      register: mcp_public_tools
+      no_log: true
+      failed_when: >-
+        mcp_public_tools.status != 200 or
+        'search_vehicles' not in mcp_public_tools.content or
+        'get_vehicle' not in mcp_public_tools.content or
+        'compare_trims' not in mcp_public_tools.content or
+        'search_offers' not in mcp_public_tools.content
+
+    - name: Verify a semantic vehicle search through the public MCP
+      ansible.builtin.uri:
+        url: https://ford-mcp.emme.business/mcp
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
+          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
+          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Host: ford-mcp.emme.business
+          Accept: application/json, text/event-stream
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 3
+          method: tools/call
+          params:
+            name: search_vehicles
+            arguments:
+              query: "SUV familiar cómoda para viajes con buen espacio"
+              filters: {}
+              limit: 3
+        status_code: 200
+        return_content: true
+        timeout: 60
+      register: mcp_public_search
+      no_log: true
+      failed_when: >-
+        mcp_public_search.status != 200 or
+        'isError' in mcp_public_search.content

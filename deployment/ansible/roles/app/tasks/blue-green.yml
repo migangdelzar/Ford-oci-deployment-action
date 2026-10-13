@@ -1,0 +1,376 @@
+---
+- name: Validate blue-green Ford Service inputs
+  ansible.builtin.assert:
+    that:
+      - app_operation | default('deploy') in ['deploy', 'rollback']
+      - app_operation | default('deploy') == 'rollback' or app_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - app_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') is match('^nginx@sha256:[a-f0-9]{64}$')
+      - (app_blue_port | default(18081) | int) != (app_green_port | default(18082) | int)
+      - (app_blue_port | default(18081) | int) != 8080
+      - (app_green_port | default(18082) | int) != 8080
+      - (remote_root ~ '/app/.env') is file
+    fail_msg: "Blue-green Ford Service requires immutable image digests, distinct slot ports, and the provisioned application environment file."
+
+- name: Check blue-green Ford Service deployment state
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/app/active-release.json"
+  register: app_release_state_file
+
+- name: Read blue-green Ford Service deployment state
+  ansible.builtin.slurp:
+    src: "{{ remote_root }}/app/active-release.json"
+  register: app_release_state_raw
+  when: app_release_state_file.stat.exists
+
+- name: Find the current legacy Ford Service listener
+  ansible.builtin.command:
+    cmd: docker ps --filter publish=8080 --filter status=running --format {% raw %}'{{.ID}}'{% endraw %}
+  register: app_legacy_listener
+  changed_when: false
+  when: not app_release_state_file.stat.exists
+
+- name: Validate legacy Ford Service listener count
+  ansible.builtin.assert:
+    that:
+      - app_legacy_listener.stdout_lines | length <= 1
+    fail_msg: "Expected at most one legacy Ford Service listener on port 8080; refusing an ambiguous traffic switch."
+  when: not app_release_state_file.stat.exists
+
+- name: Read the current legacy Ford Service image digest
+  ansible.builtin.command:
+    cmd: docker inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ app_legacy_listener.stdout_lines[0] }}"
+  register: app_legacy_image_result
+  changed_when: false
+  when:
+    - not app_release_state_file.stat.exists
+    - app_legacy_listener.stdout_lines | length > 0
+
+- name: Set current and target Ford Service slots
+  ansible.builtin.set_fact:
+    app_release_state: "{{ (app_release_state_raw.content | b64decode | from_json) if app_release_state_file.stat.exists else {} }}"
+    app_current_slot: "{{ (app_release_state_raw.content | b64decode | from_json).active_slot if app_release_state_file.stat.exists else ('legacy' if app_legacy_listener.stdout_lines | default([]) | length > 0 else 'none') }}"
+    app_current_image: "{{ (app_release_state_raw.content | b64decode | from_json).active_image if app_release_state_file.stat.exists else (app_legacy_image_result.stdout_lines[0] if app_legacy_image_result is defined and app_legacy_image_result.stdout_lines | length > 0 else '') }}"
+
+- name: Validate existing Ford Service state and rollback target
+  ansible.builtin.assert:
+    that:
+      - app_current_slot in ['blue', 'green', 'legacy', 'none']
+      - not app_release_state_file.stat.exists or app_release_state.active_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - app_operation | default('deploy') != 'rollback' or (app_release_state_file.stat.exists and app_release_state.previous_slot in ['blue', 'green'] and app_release_state.previous_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
+      - app_current_slot != 'legacy' or app_current_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+    fail_msg: "Ford Service rollback requires the previously recorded immutable image; legacy images without registry digests cannot be safely retained."
+
+- name: Select candidate Ford Service slot and image
+  ansible.builtin.set_fact:
+    app_candidate_slot: "{{ app_release_state.previous_slot if (app_operation | default('deploy')) == 'rollback' else ('green' if app_current_slot == 'blue' else 'blue') }}"
+    app_candidate_image: "{{ app_release_state.previous_image if (app_operation | default('deploy')) == 'rollback' else app_image }}"
+    app_previous_slot: "{{ app_current_slot if app_current_slot in ['blue', 'green'] else ('green' if app_current_slot == 'legacy' else '') }}"
+    app_previous_image: "{{ app_release_state.active_image if app_release_state_file.stat.exists else (app_current_image if app_current_image | length > 0 else (app_image if app_image is defined else '')) }}"
+    app_candidate_port: "{{ (app_blue_port | default(18081) | int) if ((app_release_state.previous_slot if (app_operation | default('deploy')) == 'rollback' else ('green' if app_current_slot == 'blue' else 'blue')) == 'blue' else (app_green_port | default(18082) | int) }}"
+
+- name: Validate selected Ford Service candidate identity
+  ansible.builtin.assert:
+    that:
+      - app_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - app_operation | default('deploy') != 'rollback' or app_image | default(app_candidate_image) == app_candidate_image
+    fail_msg: "The selected Ford Service candidate must be an immutable image digest."
+
+- name: Confirm the provisioned application network exists
+  ansible.builtin.command:
+    cmd: docker network inspect app_default
+  changed_when: false
+
+- name: Render blue-green Ford Service Compose file
+  ansible.builtin.template:
+    src: blue-green-compose.yml.j2
+    dest: "{{ remote_root }}/app/blue-green-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  vars:
+    app_image: "{{ app_candidate_image }}"
+    app_previous_image: "{{ app_previous_image if app_previous_image | length > 0 else app_candidate_image }}"
+    app_candidate_slot: "{{ app_candidate_slot }}"
+    app_proxy_image: "{{ app_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
+    app_blue_port: "{{ app_blue_port | default(18081) }}"
+    app_green_port: "{{ app_green_port | default(18082) }}"
+
+- name: Render candidate Ford Service proxy route
+  ansible.builtin.template:
+    src: proxy.conf.j2
+    dest: "{{ remote_root }}/app/proxy.conf.next"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  vars:
+    app_active_port: "{{ app_candidate_port }}"
+
+- name: Pull candidate with temporary GHCR credentials
+  block:
+    - name: Create temporary registry credential directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: ford-app-ghcr-
+      register: app_registry_config
+
+    - name: Authenticate to GHCR for the candidate pull
+      ansible.builtin.command:
+        cmd: docker login ghcr.io --username "{{ ghcr_username }}" --password-stdin
+        stdin: "{{ lookup('ansible.builtin.env', 'GHCR_TOKEN') }}"
+      environment:
+        DOCKER_CONFIG: "{{ app_registry_config.path }}"
+      no_log: true
+      changed_when: false
+
+    - name: Pull the immutable Ford Service candidate
+      ansible.builtin.command:
+        cmd: docker pull "{{ app_candidate_image }}"
+      environment:
+        DOCKER_CONFIG: "{{ app_registry_config.path }}"
+      changed_when: true
+
+  always:
+    - name: Log out from GHCR
+      ansible.builtin.command:
+        cmd: docker logout ghcr.io
+      environment:
+        DOCKER_CONFIG: "{{ app_registry_config.path }}"
+      no_log: true
+      changed_when: false
+      when: app_registry_config is defined and app_registry_config.path is defined
+
+    - name: Remove temporary Docker credential directory
+      ansible.builtin.file:
+        path: "{{ app_registry_config.path }}"
+        state: absent
+      when: app_registry_config is defined and app_registry_config.path is defined
+  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Pull the immutable Ford Service candidate without registry credentials
+  ansible.builtin.command:
+    cmd: docker pull "{{ app_candidate_image }}"
+  changed_when: true
+  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+
+- name: Start candidate Ford Service slot
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name ford-service
+      --env-file "{{ remote_root }}/app/.env"
+      -f "{{ remote_root }}/app/blue-green-compose.yml"
+      up -d "ford-service-{{ app_candidate_slot }}"
+  changed_when: true
+
+- name: Wait for candidate Ford Service health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ app_candidate_port }}/actuator/health"
+    status_code: 200
+    return_content: true
+    timeout: 10
+  register: app_candidate_health
+  retries: 30
+  delay: 5
+  until: app_candidate_health.status == 200
+  failed_when: app_candidate_health.status != 200 or (app_candidate_health.json.status | default('') != 'UP')
+
+- name: Start retained Ford Service rollback slot when converting from legacy
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name ford-service
+      --env-file "{{ remote_root }}/app/.env"
+      -f "{{ remote_root }}/app/blue-green-compose.yml"
+      up -d "ford-service-{{ app_previous_slot }}"
+  when:
+    - app_current_slot == 'legacy'
+    - app_previous_slot | length > 0
+  changed_when: true
+
+- name: Wait for retained Ford Service rollback slot health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ (app_blue_port | default(18081) | int) if app_previous_slot == 'blue' else (app_green_port | default(18082) | int) }}/actuator/health"
+    status_code: 200
+    return_content: true
+    timeout: 10
+  register: app_previous_slot_health
+  retries: 30
+  delay: 5
+  until: app_previous_slot_health.status == 200
+  failed_when: app_previous_slot_health.status != 200 or (app_previous_slot_health.json.status | default('') != 'UP')
+  when:
+    - app_current_slot == 'legacy'
+    - app_previous_slot | length > 0
+
+- name: Check whether the stable Ford Service proxy already exists
+  ansible.builtin.command:
+    cmd: docker inspect ford-service-proxy
+  register: app_proxy_inspect
+  changed_when: false
+  failed_when: false
+
+- name: Preserve the current Ford Service proxy route
+  ansible.builtin.copy:
+    src: "{{ remote_root }}/app/proxy.conf"
+    dest: "{{ remote_root }}/app/proxy.conf.previous"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  when: app_proxy_inspect.rc == 0
+
+- name: Install the candidate Ford Service proxy route
+  ansible.builtin.copy:
+    src: "{{ remote_root }}/app/proxy.conf.next"
+    dest: "{{ remote_root }}/app/proxy.conf"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+
+- name: Switch stable Ford Service proxy and verify the route
+  block:
+    - name: Stop the legacy Ford Service container before binding the stable listener
+      ansible.builtin.command:
+        cmd: docker stop "{{ app_legacy_listener.stdout_lines[0] }}"
+      when:
+        - app_current_slot == 'legacy'
+        - app_legacy_listener.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Start the stable Ford Service proxy
+      ansible.builtin.command:
+        cmd: >-
+          docker compose --project-name ford-service
+          --env-file "{{ remote_root }}/app/.env"
+          -f "{{ remote_root }}/app/blue-green-compose.yml"
+          up -d app-proxy
+      changed_when: true
+
+    - name: Validate stable Ford Service proxy configuration
+      ansible.builtin.command:
+        cmd: docker exec ford-service-proxy nginx -t
+      changed_when: false
+
+    - name: Reload stable Ford Service proxy
+      ansible.builtin.command:
+        cmd: docker exec ford-service-proxy nginx -s reload
+      changed_when: true
+
+    - name: Verify stable Ford Service health
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/actuator/health
+        status_code: 200
+        return_content: true
+        timeout: 10
+      register: app_stable_health
+      retries: 12
+      delay: 5
+      until: app_stable_health.status == 200
+      failed_when: app_stable_health.status != 200 or (app_stable_health.json.status | default('') != 'UP')
+
+    - name: Verify stable Ford Service webhook route
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/webhooks/meta/whatsapp
+        method: GET
+        status_code: 400
+        return_content: false
+        timeout: 10
+
+    - name: Record active and previous Ford Service release slots
+      ansible.builtin.copy:
+        dest: "{{ remote_root }}/app/active-release.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        content: >-
+          {{ {
+            'active_slot': app_candidate_slot,
+            'active_image': app_candidate_image,
+            'previous_slot': (app_previous_slot if app_previous_slot | length > 0 else none),
+            'previous_image': (app_previous_image if app_previous_slot | length > 0 else none)
+          } | to_nice_json }}
+
+  rescue:
+    - name: Restore prior Ford Service route after failed smoke
+      block:
+        - name: Restore prior Ford Service release state when present
+          ansible.builtin.copy:
+            dest: "{{ remote_root }}/app/active-release.json"
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0600"
+            content: "{{ app_release_state_raw.content | b64decode }}"
+          when: app_release_state_file.stat.exists
+
+        - name: Remove incomplete Ford Service release state on first deployment
+          ansible.builtin.file:
+            path: "{{ remote_root }}/app/active-release.json"
+            state: absent
+          when: not app_release_state_file.stat.exists
+
+        - name: Restore previous Ford Service proxy configuration when present
+          ansible.builtin.copy:
+            src: "{{ remote_root }}/app/proxy.conf.previous"
+            dest: "{{ remote_root }}/app/proxy.conf"
+            remote_src: true
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0640"
+          when:
+            - app_proxy_inspect.rc == 0
+            - app_current_slot in ['blue', 'green']
+
+        - name: Reload previous Ford Service proxy route
+          ansible.builtin.command:
+            cmd: docker exec ford-service-proxy nginx -s reload
+          when:
+            - app_proxy_inspect.rc == 0
+            - app_current_slot in ['blue', 'green']
+          changed_when: true
+
+        - name: Stop the new proxy when restoring legacy Ford Service
+          ansible.builtin.command:
+            cmd: docker stop ford-service-proxy
+          when:
+            - app_proxy_inspect.rc != 0 or app_current_slot == 'legacy'
+          changed_when: true
+          failed_when: false
+
+        - name: Restart legacy Ford Service after failed bootstrap
+          ansible.builtin.command:
+            cmd: docker start "{{ app_legacy_listener.stdout_lines[0] }}"
+          when:
+            - app_current_slot == 'legacy'
+            - app_legacy_listener.stdout_lines | length > 0
+          changed_when: true
+
+        - name: Verify the restored legacy Ford Service
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8080/actuator/health
+            status_code: 200
+            return_content: true
+            timeout: 10
+          register: app_restored_health
+          retries: 12
+          delay: 5
+          until: app_restored_health.status == 200
+          failed_when: app_restored_health.status != 200 or (app_restored_health.json.status | default('') != 'UP')
+          when: app_current_slot == 'legacy'
+
+        - name: Verify the restored prior Ford Service slot
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8080/actuator/health
+            status_code: 200
+            return_content: true
+            timeout: 10
+          register: app_restored_slot_health
+          retries: 12
+          delay: 5
+          until: app_restored_slot_health.status == 200
+          failed_when: app_restored_slot_health.status != 200 or (app_restored_slot_health.json.status | default('') != 'UP')
+          when: app_current_slot in ['blue', 'green']
+
+        - name: Fail deployment after automatic Ford Service route restoration
+          ansible.builtin.fail:
+            msg: "Ford Service deployment failed: candidate_image={{ app_candidate_image }} prior_image={{ app_previous_image if app_previous_slot | length > 0 else 'none' }} rollback_result=prior_route_health_verified."
+

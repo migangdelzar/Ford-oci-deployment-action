@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - "log_line_prefix=%m [%p] app=%a user=%u db=%d sqlstate=%e "
+      - -c
+      - log_error_verbosity=verbose
+      - -c
+      - log_min_error_statement=panic
+    environment:
+      POSTGRES_DB: ford_service
+      POSTGRES_USER: ford
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be supplied}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be supplied}
+    ports: ["{{ data_bind_address }}:5432:5432"]
+    volumes: ["{{ data_volume_mount }}/postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ford -d ford_service"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be supplied}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be supplied}"]
+    ports: ["{{ data_bind_address }}:6379:6379"]
+    volumes: ["{{ data_volume_mount }}/redis:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

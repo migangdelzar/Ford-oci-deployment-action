@@ -1,0 +1,14 @@
+---
+- name: Run and verify an on-host Ford database backup
+  hosts: data
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create a verified PostgreSQL and Redis backup before release changes
+      ansible.builtin.command:
+        cmd: "{{ remote_root }}/backup/backup-databases.sh"
+      register: release_backup
+      async: 1800
+      poll: 10
+      changed_when: true
+      failed_when: release_backup.rc != 0 or release_backup.stdout is not search('backup_created=[0-9]{8}T[0-9]{6}Z')

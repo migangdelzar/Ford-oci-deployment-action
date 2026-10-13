@@ -1,0 +1,26 @@
+name: Test OCI deployment action
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  action-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate shell syntax
+        run: bash -n .github/actions/oci-blue-green/deploy.sh
+      - name: Run action package contract tests
+        run: python -m unittest discover -s tests -v

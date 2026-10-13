@@ -1,0 +1,6 @@
+---
+- name: Deploy Ford catalog MCP on emme-2
+  hosts: data
+  become: true
+  roles:
+    - mcp

@@ -1,0 +1,420 @@
+---
+- name: Validate blue-green MCP deployment inputs
+  ansible.builtin.assert:
+    that:
+      - mcp_operation | default('deploy') in ['deploy', 'rollback']
+      - mcp_operation | default('deploy') == 'rollback' or mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') is match('^nginx@sha256:[a-f0-9]{64}$')
+      - (mcp_blue_port | default(3101) | int) != (mcp_green_port | default(3102) | int)
+      - (mcp_blue_port | default(3101) | int) != 3001
+      - (mcp_green_port | default(3102) | int) != 3001
+      - (remote_root ~ '/mcp/.env') is file
+    fail_msg: "Blue-green MCP requires immutable image digests, distinct slot ports, and the provisioned MCP environment file."
+
+- name: Check blue-green MCP deployment state
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/mcp/active-release.json"
+  register: mcp_release_state_file
+
+- name: Read blue-green MCP deployment state
+  ansible.builtin.slurp:
+    src: "{{ remote_root }}/mcp/active-release.json"
+  register: mcp_release_state_raw
+  when: mcp_release_state_file.stat.exists
+
+- name: Find the current legacy MCP listener
+  ansible.builtin.command:
+    cmd: docker ps --filter publish=3001 --filter status=running --format {% raw %}'{{.ID}}'{% endraw %}
+  register: mcp_legacy_listener
+  changed_when: false
+  when: not mcp_release_state_file.stat.exists
+
+- name: Validate legacy MCP listener count
+  ansible.builtin.assert:
+    that:
+      - mcp_legacy_listener.stdout_lines | length <= 1
+    fail_msg: "Expected at most one legacy MCP listener on port 3001; refusing an ambiguous traffic switch."
+  when: not mcp_release_state_file.stat.exists
+
+- name: Read the current legacy MCP image
+  ansible.builtin.command:
+    cmd: docker inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ mcp_legacy_listener.stdout_lines[0] }}"
+  register: mcp_legacy_image_result
+  changed_when: false
+  when:
+    - not mcp_release_state_file.stat.exists
+    - mcp_legacy_listener.stdout_lines | length > 0
+
+- name: Set current and target MCP slots
+  ansible.builtin.set_fact:
+    mcp_release_state: "{{ (mcp_release_state_raw.content | b64decode | from_json) if mcp_release_state_file.stat.exists else {} }}"
+    mcp_current_slot: "{{ (mcp_release_state_raw.content | b64decode | from_json).active_slot if mcp_release_state_file.stat.exists else ('legacy' if mcp_legacy_listener.stdout_lines | default([]) | length > 0 else 'none') }}"
+    mcp_current_image: "{{ (mcp_release_state_raw.content | b64decode | from_json).active_image if mcp_release_state_file.stat.exists else (mcp_legacy_image_result.stdout_lines[0] if mcp_legacy_image_result is defined and mcp_legacy_image_result.stdout_lines | length > 0 else '') }}"
+
+- name: Validate existing MCP state and rollback target
+  ansible.builtin.assert:
+    that:
+      - mcp_current_slot in ['blue', 'green', 'legacy', 'none']
+      - not mcp_release_state_file.stat.exists or mcp_release_state.active_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - mcp_operation | default('deploy') != 'rollback' or (mcp_release_state_file.stat.exists and mcp_release_state.previous_slot in ['blue', 'green'] and mcp_release_state.previous_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
+      - mcp_current_slot != 'legacy' or (mcp_legacy_image_result.stdout_lines | default([]) | length > 0)
+    fail_msg: "MCP rollback is allowed only to the previously recorded immutable slot."
+
+- name: Select candidate slot and image
+  ansible.builtin.set_fact:
+    mcp_candidate_slot: "{{ mcp_release_state.previous_slot if (mcp_operation | default('deploy')) == 'rollback' else ('green' if mcp_current_slot == 'blue' else 'blue') }}"
+    mcp_candidate_image: "{{ mcp_release_state.previous_image if (mcp_operation | default('deploy')) == 'rollback' else mcp_image }}"
+    mcp_previous_slot: "{{ mcp_current_slot if mcp_current_slot in ['blue', 'green'] else ('green' if mcp_current_slot == 'legacy' else '') }}"
+    mcp_previous_image: "{{ mcp_release_state.active_image if mcp_release_state_file.stat.exists else (mcp_current_image if mcp_current_image | length > 0 else (mcp_image if mcp_image is defined else mcp_release_state.previous_image)) }}"
+    mcp_candidate_port: "{{ (mcp_blue_port | default(3101) | int) if ((mcp_release_state.previous_slot if (mcp_operation | default('deploy')) == 'rollback' else ('green' if mcp_current_slot == 'blue' else 'blue')) == 'blue' else (mcp_green_port | default(3102) | int) }}"
+
+- name: Validate current slot and requested rollback identity
+  ansible.builtin.assert:
+    that:
+      - mcp_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - mcp_operation | default('deploy') != 'rollback' or mcp_image | default(mcp_candidate_image) == mcp_candidate_image
+    fail_msg: "The selected MCP candidate must be the recorded immutable image."
+
+- name: Render blue-green MCP Compose file
+  ansible.builtin.template:
+    src: blue-green-compose.yml.j2
+    dest: "{{ remote_root }}/mcp/blue-green-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  vars:
+    mcp_image: "{{ mcp_candidate_image }}"
+    mcp_previous_image: "{{ mcp_previous_image }}"
+    mcp_candidate_slot: "{{ mcp_candidate_slot }}"
+    mcp_proxy_image: "{{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
+    mcp_blue_port: "{{ mcp_blue_port | default(3101) }}"
+    mcp_green_port: "{{ mcp_green_port | default(3102) }}"
+  no_log: true
+
+- name: Render candidate MCP proxy route
+  ansible.builtin.template:
+    src: proxy.conf.j2
+    dest: "{{ remote_root }}/mcp/proxy.conf.next"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  vars:
+    mcp_active_port: "{{ mcp_candidate_port }}"
+
+- name: Pull the candidate with temporary GHCR credentials
+  block:
+    - name: Create temporary registry credential directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: ford-mcp-ghcr-
+      register: mcp_registry_config
+
+    - name: Authenticate to GHCR for the candidate pull
+      ansible.builtin.command:
+        cmd: docker login ghcr.io --username "{{ ghcr_username }}" --password-stdin
+        stdin: "{{ lookup('ansible.builtin.env', 'GHCR_TOKEN') }}"
+      environment:
+        DOCKER_CONFIG: "{{ mcp_registry_config.path }}"
+      no_log: true
+      changed_when: false
+
+    - name: Pull the immutable MCP candidate
+      ansible.builtin.command:
+        cmd: docker pull "{{ mcp_candidate_image }}"
+      environment:
+        DOCKER_CONFIG: "{{ mcp_registry_config.path }}"
+      changed_when: true
+
+  always:
+    - name: Log out from GHCR
+      ansible.builtin.command:
+        cmd: docker logout ghcr.io
+      environment:
+        DOCKER_CONFIG: "{{ mcp_registry_config.path }}"
+      no_log: true
+      changed_when: false
+      when: mcp_registry_config is defined and mcp_registry_config.path is defined
+
+    - name: Remove temporary Docker credential directory
+      ansible.builtin.file:
+        path: "{{ mcp_registry_config.path }}"
+        state: absent
+      when: mcp_registry_config is defined and mcp_registry_config.path is defined
+  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Pull the immutable MCP candidate without registry credentials
+  ansible.builtin.command:
+    cmd: docker pull "{{ mcp_candidate_image }}"
+  changed_when: true
+  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+
+- name: Run catalog migrations once from the immutable candidate image
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm --network data_default
+      --env-file "{{ remote_root }}/mcp/.env"
+      "{{ mcp_candidate_image }}" node dist/src/cli.js migrate
+  changed_when: true
+  when: mcp_operation | default('deploy') == 'deploy'
+
+- name: Start the candidate MCP slot
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name ford-mcp
+      --env-file "{{ remote_root }}/mcp/.env"
+      -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+      up -d "mcp-{{ mcp_candidate_slot }}"
+  register: mcp_candidate_compose
+  changed_when: true
+
+- name: Wait for candidate MCP health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ mcp_candidate_port }}/mcp"
+    status_code: 401
+    timeout: 10
+  register: mcp_candidate_smoke
+  retries: 30
+  delay: 5
+  until: mcp_candidate_smoke.status == 401
+
+- name: Set MCP protocol smoke script
+  ansible.builtin.set_fact:
+    mcp_protocol_smoke_script: |
+      async function call(id, method, params) {
+        const response = await fetch(process.env.MCP_SMOKE_URL, {
+          method: 'POST',
+          headers: {
+            'authorization': 'Bearer ' + process.env.MCP_HTTP_BEARER_TOKEN,
+            'content-type': 'application/json',
+            'accept': 'application/json, text/event-stream'
+          },
+          body: JSON.stringify({jsonrpc: '2.0', id, method, params})
+        });
+        const body = await response.text();
+        if (!response.ok) throw new Error('MCP HTTP check failed');
+        if (method !== 'tools/list') return;
+        const dataLine = body.split(/\r?\n/).find(line => line.startsWith('data:'));
+        const payload = JSON.parse(dataLine ? dataLine.slice(5).trim() : body);
+        if (!payload.result || !Array.isArray(payload.result.tools)) throw new Error('MCP tools/list response is invalid');
+        const names = payload.result.tools.map(tool => tool.name);
+        const required = process.env.MCP_SMOKE_REQUIRED_TOOLS.split(',');
+        if (!required.every(name => names.includes(name))) throw new Error('Required MCP tools are missing');
+      }
+      (async () => {
+        await call(1, 'initialize', {
+          protocolVersion: '2025-03-26', capabilities: {},
+          clientInfo: {name: 'blue-green-deployment-smoke', version: '1'}
+        });
+        await call(2, 'tools/list', {});
+      })().catch(() => process.exit(1));
+
+- name: Verify candidate MCP protocol and tool contract on the VM
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - --env-file
+      - "{{ remote_root }}/mcp/.env"
+      - --env
+      - "MCP_SMOKE_URL=http://127.0.0.1:{{ mcp_candidate_port }}/mcp"
+      - --env
+      - MCP_SMOKE_REQUIRED_TOOLS=search_vehicles,get_vehicle,compare_trims,search_offers
+      - "{{ mcp_candidate_image }}"
+      - node
+      - -e
+      - "{{ mcp_protocol_smoke_script }}"
+  changed_when: false
+  no_log: true
+
+- name: Start the retained MCP rollback slot when converting from legacy
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name ford-mcp
+      --env-file "{{ remote_root }}/mcp/.env"
+      -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+      up -d "mcp-{{ mcp_previous_slot }}"
+  when:
+    - mcp_current_slot == 'legacy'
+    - mcp_previous_slot | length > 0
+  changed_when: true
+
+- name: Wait for the retained MCP rollback slot health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ (mcp_blue_port | default(3101) | int) if mcp_previous_slot == 'blue' else (mcp_green_port | default(3102) | int) }}/mcp"
+    status_code: 401
+    timeout: 10
+  register: mcp_previous_slot_health
+  retries: 30
+  delay: 5
+  until: mcp_previous_slot_health.status == 401
+  when:
+    - mcp_current_slot == 'legacy'
+    - mcp_previous_slot | length > 0
+
+- name: Check whether the stable MCP proxy already exists
+  ansible.builtin.command:
+    cmd: docker inspect ford-mcp-proxy
+  register: mcp_proxy_inspect
+  changed_when: false
+  failed_when: false
+
+- name: Preserve the current MCP proxy route
+  ansible.builtin.copy:
+    src: "{{ remote_root }}/mcp/proxy.conf"
+    dest: "{{ remote_root }}/mcp/proxy.conf.previous"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  when: mcp_proxy_inspect.rc == 0
+
+- name: Install the candidate MCP proxy route
+  ansible.builtin.copy:
+    src: "{{ remote_root }}/mcp/proxy.conf.next"
+    dest: "{{ remote_root }}/mcp/proxy.conf"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+
+- name: Switch stable MCP proxy and verify the route
+  block:
+    - name: Stop the legacy MCP container before binding the stable listener
+      ansible.builtin.command:
+        cmd: docker stop "{{ mcp_legacy_listener.stdout_lines[0] }}"
+      when:
+        - mcp_current_slot == 'legacy'
+        - mcp_legacy_listener.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Start or reload the stable MCP proxy
+      ansible.builtin.shell:
+        cmd: >-
+          docker compose --project-name ford-mcp
+          --env-file "{{ remote_root }}/mcp/.env"
+          -f "{{ remote_root }}/mcp/blue-green-compose.yml"
+          up -d mcp-proxy &&
+          docker exec ford-mcp-proxy nginx -t &&
+          docker exec ford-mcp-proxy nginx -s reload
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Verify stable MCP route and tools on the VM
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - host
+          - --env-file
+          - "{{ remote_root }}/mcp/.env"
+          - --env
+          - MCP_SMOKE_URL=http://127.0.0.1:3001/mcp
+          - --env
+          - MCP_SMOKE_REQUIRED_TOOLS=search_vehicles,get_vehicle,compare_trims,search_offers
+          - "{{ mcp_candidate_image }}"
+          - node
+          - -e
+          - "{{ mcp_protocol_smoke_script }}"
+      changed_when: false
+      no_log: true
+
+    - name: Record active and previous MCP release slots
+      ansible.builtin.copy:
+        dest: "{{ remote_root }}/mcp/active-release.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        content: >-
+          {{ {
+            'active_slot': mcp_candidate_slot,
+            'active_image': mcp_candidate_image,
+            'previous_slot': (mcp_previous_slot if mcp_previous_slot | length > 0 else none),
+            'previous_image': (mcp_previous_image if mcp_previous_slot | length > 0 else none)
+          } | to_nice_json }}
+
+  rescue:
+    - name: Restore prior MCP route after failed smoke
+      block:
+        - name: Restore prior MCP release state when present
+          ansible.builtin.copy:
+            dest: "{{ remote_root }}/mcp/active-release.json"
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0600"
+            content: "{{ mcp_release_state_raw.content | b64decode }}"
+          when: mcp_release_state_file.stat.exists
+
+        - name: Remove incomplete MCP release state on first deployment
+          ansible.builtin.file:
+            path: "{{ remote_root }}/mcp/active-release.json"
+            state: absent
+          when: not mcp_release_state_file.stat.exists
+
+        - name: Restore previous proxy configuration when present
+          ansible.builtin.copy:
+            src: "{{ remote_root }}/mcp/proxy.conf.previous"
+            dest: "{{ remote_root }}/mcp/proxy.conf"
+            remote_src: true
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0640"
+          when:
+            - mcp_proxy_inspect.rc == 0
+            - mcp_current_slot in ['blue', 'green']
+
+        - name: Restore the previous proxy route
+          ansible.builtin.command:
+            cmd: docker exec ford-mcp-proxy nginx -s reload
+          when:
+            - mcp_proxy_inspect.rc == 0
+            - mcp_current_slot in ['blue', 'green']
+          changed_when: true
+
+        - name: Stop the new proxy when bootstrapping from legacy MCP
+          ansible.builtin.command:
+            cmd: docker stop ford-mcp-proxy
+          when:
+            - mcp_proxy_inspect.rc != 0 or mcp_current_slot == 'legacy'
+          changed_when: true
+          failed_when: false
+
+        - name: Restart the legacy MCP container after failed bootstrap
+          ansible.builtin.command:
+            cmd: docker start "{{ mcp_legacy_listener.stdout_lines[0] }}"
+          when:
+            - mcp_current_slot == 'legacy'
+            - mcp_legacy_listener.stdout_lines | length > 0
+          changed_when: true
+
+        - name: Verify the restored MCP route and tools on the VM
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --network
+              - host
+              - --env-file
+              - "{{ remote_root }}/mcp/.env"
+              - --env
+              - MCP_SMOKE_URL=http://127.0.0.1:3001/mcp
+              - --env
+              - MCP_SMOKE_REQUIRED_TOOLS=search_vehicles,get_vehicle,compare_trims,search_offers
+              - "{{ mcp_current_image }}"
+              - node
+              - -e
+              - "{{ mcp_protocol_smoke_script }}"
+          changed_when: false
+          when: mcp_current_slot in ['legacy', 'blue', 'green']
+          no_log: true
+
+        - name: Fail deployment after automatic route restoration
+          ansible.builtin.fail:
+            msg: "MCP deployment failed: candidate_image={{ mcp_candidate_image }} prior_image={{ mcp_previous_image if mcp_previous_slot | length > 0 else 'none' }} rollback_result=prior_route_and_tools_verified."
+

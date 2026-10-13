@@ -1,0 +1,59 @@
+---
+- name: Configure common runtime prerequisites
+  hosts: all
+  become: true
+  tags: [common]
+  roles:
+    - common
+
+- name: Configure data services
+  hosts: data
+  become: true
+  tags: [data]
+  roles:
+    - data
+
+- name: Configure OCI database backups
+  hosts: data
+  become: true
+  tags: [backup]
+  roles:
+    - backup
+
+- name: Configure application service
+  hosts: app
+  become: false
+  tags: [app]
+  roles:
+    - app
+
+- name: Verify private service connectivity
+  hosts: app
+  become: false
+  tags: [verify]
+  tasks:
+    - name: Check PostgreSQL port from app VM
+      ansible.builtin.wait_for:
+        host: "{{ emme_2_private_ip }}"
+        port: 5432
+        timeout: 10
+
+    - name: Check Redis port from app VM
+      ansible.builtin.wait_for:
+        host: "{{ emme_2_private_ip }}"
+        port: 6379
+        timeout: 10
+
+    - name: Check local application health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/actuator/health
+        status_code: 200
+        return_content: false
+        timeout: 10
+    - name: Check Meta webhook route is reachable
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/webhooks/meta/whatsapp
+        method: GET
+        status_code: 400
+        return_content: false
+        timeout: 10

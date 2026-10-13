@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+archive_name="${1:-}"
+if [[ ! "$archive_name" =~ ^[A-Za-z0-9._-]+\.dump\.gz$ ]]; then
+  echo "Usage: restore-database.sh <archive-name.dump.gz>" >&2
+  exit 2
+fi
+
+archive="{{ remote_root }}/backup/archive/$archive_name"
+[[ -f "$archive" ]] || { echo "Backup not found: $archive_name" >&2; exit 1; }
+
+echo "Restoring $archive_name into ford_service; the current database will be replaced."
+gzip -dc "$archive" | docker compose --env-file "{{ remote_root }}/data/.env" \
+  -f "{{ remote_root }}/data/compose.yml" exec -T postgres \
+  pg_restore -U ford -d ford_service --clean --if-exists --no-owner
+echo "database_restore=completed archive=$archive_name"

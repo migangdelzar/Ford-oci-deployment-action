@@ -1,0 +1,13 @@
+[Unit]
+Description=Ford PostgreSQL and Redis Object Storage backup
+Wants=network-online.target
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin
+ExecStart={{ remote_root }}/backup/backup-databases.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30min

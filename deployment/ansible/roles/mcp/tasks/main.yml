@@ -1,0 +1,346 @@
+---
+- name: Validate the MCP image and bearer token
+  ansible.builtin.assert:
+    that:
+      - mcp_image is defined
+      - mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$')
+      - lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) | length > 0
+      - lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') | default('', true) | length > 0
+      - mcp_catalog_dump_path is defined
+      - mcp_catalog_dump_path is file
+      - mcp_cloudflared_tunnel_token_path is defined
+      - mcp_cloudflared_tunnel_token_path is file
+    fail_msg: "Pass a GHCR MCP image and configured MCP/DB credentials."
+
+- name: Confirm the existing data Docker network
+  ansible.builtin.command:
+    cmd: docker network inspect data_default
+  changed_when: false
+
+- name: Confirm the Ford-service database is ready
+  ansible.builtin.command:
+    cmd: docker exec -u postgres data-postgres-1 pg_isready -U ford -d ford_service
+  register: mcp_database_ready
+  retries: 12
+  delay: 5
+  until: mcp_database_ready.rc == 0
+  changed_when: false
+
+- name: Check whether the isolated MCP schema already exists
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -u postgres data-postgres-1
+      psql -U ford -d ford_service -v ON_ERROR_STOP=1 -Atc
+      "SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'ford'"
+  register: mcp_schema_exists
+  changed_when: false
+
+- name: Check whether the catalog model table exists
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -u postgres data-postgres-1
+      psql -U ford -d ford_service -v ON_ERROR_STOP=1 -Atc
+      "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ford' AND table_name = 'models'"
+  register: mcp_models_table_exists
+  changed_when: false
+
+- name: Confirm an incomplete MCP schema contains no catalog data
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -u postgres data-postgres-1
+      psql -U ford -d ford_service -v ON_ERROR_STOP=1 -Atc
+      "SELECT concat((SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ford' AND table_name <> 'schema_migrations'), ':', (SELECT count(*) FROM ford.schema_migrations))"
+  register: mcp_partial_schema_state
+  changed_when: false
+  when:
+    - mcp_schema_exists.stdout | trim == '1'
+    - mcp_models_table_exists.stdout | trim == '0'
+
+- name: Refuse to overwrite a partially populated MCP schema
+  ansible.builtin.assert:
+    that:
+      - mcp_partial_schema_state.stdout | trim == '0:0'
+    fail_msg: "The existing ford schema is neither a complete catalog nor the empty migration-only state from an interrupted import. No data was changed."
+  when:
+    - mcp_schema_exists.stdout | trim == '1'
+    - mcp_models_table_exists.stdout | trim == '0'
+
+- name: Create the MCP deployment directory
+  ansible.builtin.file:
+    path: "{{ remote_root }}/mcp"
+    state: directory
+    owner: root
+    group: "65532"
+    mode: "0750"
+
+- name: Install the existing Cloudflare tunnel credential on emme-2
+  ansible.builtin.copy:
+    src: "{{ mcp_cloudflared_tunnel_token_path }}"
+    dest: "{{ remote_root }}/mcp/cloudflared.token"
+    owner: "65532"
+    group: "65532"
+    mode: "0400"
+  no_log: true
+
+- name: Restore catalog data into the isolated ford schema when it is absent
+  when: mcp_models_table_exists.stdout | trim == '0'
+  block:
+    - name: Copy the verified catalog dump to emme-2
+      ansible.builtin.copy:
+        src: "{{ mcp_catalog_dump_path }}"
+        dest: "{{ remote_root }}/mcp/catalog.dump"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Ensure required PostgreSQL extensions exist
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -u postgres data-postgres-1
+          psql -U ford -d ford_service -v ON_ERROR_STOP=1 -c
+          "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"
+      changed_when: false
+
+    - name: Create the isolated MCP schema
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -u postgres data-postgres-1
+          psql -U ford -d ford_service -v ON_ERROR_STOP=1 -c
+          "CREATE SCHEMA ford AUTHORIZATION ford"
+      when: mcp_schema_exists.stdout | trim == '0'
+
+    - name: Create the isolated MCP migration ledger
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -u postgres data-postgres-1
+          psql -U ford -d ford_service -v ON_ERROR_STOP=1 -c
+          "CREATE TABLE ford.schema_migrations (filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
+      when: mcp_schema_exists.stdout | trim == '0'
+
+    - name: Copy the catalog archive into the PostgreSQL container
+      ansible.builtin.command:
+        cmd: docker cp "{{ remote_root }}/mcp/catalog.dump" data-postgres-1:/tmp/ford-mcp-catalog.dump
+      changed_when: true
+
+    - name: Make the temporary archive readable to PostgreSQL
+      ansible.builtin.command:
+        cmd: docker exec data-postgres-1 chmod 0644 /tmp/ford-mcp-catalog.dump
+      changed_when: true
+
+    - name: Restore only the ford catalog schema in one transaction
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -u postgres data-postgres-1
+          pg_restore --schema=ford --no-owner --no-acl --single-transaction
+          --username=ford --dbname=ford_service /tmp/ford-mcp-catalog.dump
+      changed_when: true
+
+    - name: Seed the MCP migration ledger from the archived catalog version
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -u postgres data-postgres-1
+          psql -U ford -d ford_service -v ON_ERROR_STOP=1 -c
+          "INSERT INTO ford.schema_migrations(filename) VALUES
+          ('001_extensions.sql'),('002_schema.sql'),('003_indexes.sql'),
+          ('004_document_keys.sql'),('005_document_sections.sql'),
+          ('006_document_content_hash_identity.sql'),('007_embedding_dimensions_1024.sql'),
+          ('008_offers.sql'),('009_incremental_sync.sql'),('010_financing_identity.sql'),
+          ('011_financing_quality_backfill.sql'),('012_page_links_and_image_sources.sql'),
+          ('013_deduplicate_promotion_records.sql'),('014_remove_duplicate_promotion_conditions.sql'),
+          ('015_remove_privacy_heading_vehicle_rows.sql'),('016_vehicle_comparisons.sql'),
+          ('017_semantic_document_content.sql'),('018_disable_uncurated_embeddings.sql'),
+          ('019_structured_financing_inputs.sql') ON CONFLICT DO NOTHING"
+      changed_when: true
+
+- name: Confirm the catalog schema has restored model data
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -u postgres data-postgres-1
+      psql -U ford -d ford_service -v ON_ERROR_STOP=1 -Atc
+      "SELECT concat('models=', (SELECT count(*) FROM ford.models),
+      ',variants=', (SELECT count(*) FROM ford.variants),
+      ',offers=', (SELECT count(*) FROM ford.offers),
+      ',documents=', (SELECT count(*) FROM ford.documents))"
+  register: mcp_model_count
+  changed_when: false
+  failed_when: >-
+    mcp_model_count.rc != 0 or
+    'models=30' not in mcp_model_count.stdout or
+    'variants=121' not in mcp_model_count.stdout or
+    'offers=737' not in mcp_model_count.stdout or
+    'documents=1109' not in mcp_model_count.stdout
+
+- name: Allow MCP traffic from emme-1 only
+  block:
+    - name: Check whether firewalld is active
+      ansible.builtin.command: systemctl is-active --quiet firewalld
+      register: mcp_firewalld_active
+      changed_when: false
+      failed_when: false
+
+    - name: Check MCP private firewall rule
+      ansible.builtin.command: >-
+        firewall-cmd --query-rich-rule="rule family='ipv4'
+        source address='{{ emme_1_private_ip }}' port port='3001'
+        protocol='tcp' accept"
+      register: mcp_firewall_rule
+      changed_when: false
+      failed_when: mcp_firewall_rule.rc not in [0, 1]
+      when: mcp_firewalld_active.rc == 0
+
+    - name: Add MCP private firewall rule
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --add-rich-rule="rule family='ipv4'
+        source address='{{ emme_1_private_ip }}' port port='3001'
+        protocol='tcp' accept"
+      when: mcp_firewalld_active.rc == 0 and mcp_firewall_rule.rc == 1
+      notify: Reload firewalld
+  notify: Reload firewalld
+
+- name: Render MCP environment
+  ansible.builtin.template:
+    src: mcp.env.j2
+    dest: "{{ remote_root }}/mcp/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Render MCP Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ remote_root }}/mcp/compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+
+- name: Authenticate to GHCR
+  ansible.builtin.command:
+    cmd: docker login ghcr.io --username "{{ ghcr_username }}" --password-stdin
+    stdin: "{{ lookup('ansible.builtin.env', 'GHCR_TOKEN') }}"
+  no_log: true
+  changed_when: false
+  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Pull MCP image
+  ansible.builtin.command:
+    cmd: docker compose --env-file "{{ remote_root }}/mcp/.env" -f "{{ remote_root }}/mcp/compose.yml" pull mcp
+  changed_when: true
+
+- name: Run MCP catalog migrations once before starting the service
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm --network data_default
+      --env-file "{{ remote_root }}/mcp/.env"
+      "{{ mcp_image }}" node dist/src/cli.js migrate
+  changed_when: true
+
+- name: Start MCP and embedding service
+  block:
+    - name: Start Compose services and wait for health
+      ansible.builtin.shell:
+        cmd: >-
+          docker compose --env-file "{{ remote_root }}/mcp/.env"
+          -f "{{ remote_root }}/mcp/compose.yml" up -d --wait
+          > "{{ remote_root }}/mcp/startup.log" 2>&1
+        executable: /bin/bash
+      register: mcp_compose
+      changed_when: true
+  rescue:
+    - name: Read the last Compose startup messages
+      ansible.builtin.command:
+        cmd: tail -n 40 "{{ remote_root }}/mcp/startup.log"
+      register: mcp_compose_log
+      changed_when: false
+
+    - name: Show concise Compose startup failure
+      ansible.builtin.debug:
+        var: mcp_compose_log.stdout_lines
+
+    - name: Stop deployment after Compose startup failure
+      ansible.builtin.fail:
+        msg: "MCP Compose startup did not become healthy. The captured startup log is {{ remote_root }}/mcp/startup.log."
+
+- name: Wait for MCP container health
+  ansible.builtin.command:
+    cmd: docker inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} ford-mcp-mcp-1
+  register: mcp_health
+  retries: 30
+  delay: 5
+  until: mcp_health.stdout | trim == 'healthy'
+  changed_when: false
+
+- name: Initialize MCP through the local emme-2 listener
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3001/mcp
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
+      Host: ford-mcp.emme.business
+      Accept: application/json, text/event-stream
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      id: 1
+      method: initialize
+      params:
+        protocolVersion: "2025-03-26"
+        capabilities: {}
+        clientInfo:
+          name: deployment-smoke
+          version: "1"
+    status_code: 200
+    return_content: true
+  delegate_to: emme-2
+  register: mcp_initialize
+  no_log: true
+
+- name: Verify MCP tools are returned on the local listener
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3001/mcp
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
+      Host: ford-mcp.emme.business
+      Accept: application/json, text/event-stream
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      id: 2
+      method: tools/list
+      params: {}
+    status_code: 200
+    return_content: true
+  delegate_to: emme-2
+  register: mcp_tools_list
+  no_log: true
+  failed_when: >-
+    mcp_tools_list.status != 200 or
+    'search_vehicles' not in mcp_tools_list.content or
+    'get_vehicle' not in mcp_tools_list.content or
+    'compare_trims' not in mcp_tools_list.content or
+    'search_offers' not in mcp_tools_list.content
+
+- name: Confirm catalog data is present after deployment
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -u postgres data-postgres-1
+      psql -U ford -d ford_service -v ON_ERROR_STOP=1 -Atc
+      "SELECT concat('models=', (SELECT count(*) FROM ford.models),
+      ',variants=', (SELECT count(*) FROM ford.variants),
+      ',offers=', (SELECT count(*) FROM ford.offers),
+      ',documents=', (SELECT count(*) FROM ford.documents))"
+  register: mcp_catalog_counts
+  changed_when: false
+  failed_when: >-
+    mcp_catalog_counts.rc != 0 or
+    'models=30' not in mcp_catalog_counts.stdout or
+    'variants=121' not in mcp_catalog_counts.stdout or
+    'offers=737' not in mcp_catalog_counts.stdout or
+    'documents=1109' not in mcp_catalog_counts.stdout
+
+- name: Report existing MCP schema state
+  ansible.builtin.debug:
+    msg: >-
+      Existing isolated ford schema detected ({{ mcp_schema_exists.stdout | trim }}).
+      This deployment does not drop or overwrite it; source data import is a separate guarded step.

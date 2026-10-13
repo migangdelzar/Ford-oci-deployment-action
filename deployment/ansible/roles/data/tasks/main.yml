@@ -1,0 +1,81 @@
+---
+- name: Create data directories
+  ansible.builtin.file:
+    path: "{{ data_volume_mount }}/{{ item }}"
+    state: directory
+    owner: "999"
+    group: "999"
+    mode: "0750"
+  loop: [postgres, redis]
+
+- name: Render data environment
+  ansible.builtin.template:
+    src: data.env.j2
+    dest: "{{ remote_root }}/data/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Render data Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ remote_root }}/data/compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+
+- name: Check whether firewalld is active
+  ansible.builtin.command: systemctl is-active --quiet firewalld
+  register: firewalld_active
+  changed_when: false
+  failed_when: false
+
+- name: Check PostgreSQL private firewall rule
+  ansible.builtin.command: >-
+    firewall-cmd --query-rich-rule="rule family='ipv4' source address='{{ emme_1_private_ip }}'
+    port port='5432' protocol='tcp' accept"
+  register: postgres_firewall_rule
+  changed_when: false
+  failed_when: postgres_firewall_rule.rc not in [0, 1]
+  when: firewalld_active.rc == 0
+
+- name: Allow PostgreSQL from the application VM only
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='{{ emme_1_private_ip }}'
+    port port='5432' protocol='tcp' accept"
+  when: firewalld_active.rc == 0 and postgres_firewall_rule.rc == 1
+  notify: Reload firewalld
+
+- name: Check Redis private firewall rule
+  ansible.builtin.command: >-
+    firewall-cmd --query-rich-rule="rule family='ipv4' source address='{{ emme_1_private_ip }}'
+    port port='6379' protocol='tcp' accept"
+  register: redis_firewall_rule
+  changed_when: false
+  failed_when: redis_firewall_rule.rc not in [0, 1]
+  when: firewalld_active.rc == 0
+
+- name: Allow Redis from the application VM only
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='{{ emme_1_private_ip }}'
+    port port='6379' protocol='tcp' accept"
+  when: firewalld_active.rc == 0 and redis_firewall_rule.rc == 1
+  notify: Reload firewalld
+
+- name: Start PostgreSQL and Redis
+  ansible.builtin.command:
+    cmd: docker compose --env-file "{{ remote_root }}/data/.env" -f "{{ remote_root }}/data/compose.yml" up -d --wait
+  register: data_compose
+  changed_when: "'Started' in data_compose.stdout or 'Created' in data_compose.stdout or 'Recreated' in data_compose.stdout"
+
+- name: Reconcile the application PostgreSQL role password
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --env-file "{{ remote_root }}/data/.env"
+      -f "{{ remote_root }}/data/compose.yml"
+      exec -T -u postgres postgres
+      psql -v ON_ERROR_STOP=1 -U ford -d ford_service
+      -c "ALTER ROLE ford PASSWORD '{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') }}';"
+  no_log: true
+  changed_when: false
