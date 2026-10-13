@@ -82,6 +82,99 @@ class ActionPackageContractTest(unittest.TestCase):
             with self.subTest(playbook=playbook):
                 self.assertTrue((ROOT / "deployment/ansible" / playbook).is_file())
 
+    def test_mcp_compose_templates_select_the_http_command(self):
+        templates = (
+            ROOT / "deployment/ansible/roles/mcp/templates/compose.yml.j2",
+            ROOT / "deployment/ansible/roles/mcp/templates/blue-green-compose.yml.j2",
+        )
+
+        for path in templates:
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertRegex(
+                    source,
+                    r'command:\s*\["node", "dist/src/cli\.js", "mcp-http"\]',
+                )
+
+    def test_blue_green_runs_catalog_migrations_before_starting_mcp(self):
+        source = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+        migrate = source.index("Run catalog migrations once from the immutable candidate image")
+        start = source.index("Start the candidate MCP slot")
+
+        self.assertLess(migrate, start)
+        self.assertIn('run --rm --no-deps mcp node dist/src/cli.js migrate', source)
+
+    def test_migration_runs_with_the_candidate_image_and_compose_database_environment(self):
+        compose = (
+            ROOT / "deployment/ansible/roles/mcp/templates/compose.yml.j2"
+        ).read_text(encoding="utf-8")
+        override = (
+            ROOT / "deployment/ansible/roles/mcp/templates/migration-compose.yml.j2"
+        ).read_text(encoding="utf-8")
+        tasks = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+        migration_start = tasks.index(
+            "Run catalog migrations once from the immutable candidate image"
+        )
+        migration_end = tasks.index("\n- name:", migration_start + 1)
+        migration = tasks[migration_start:migration_end]
+
+        self.assertIn("DATABASE_URL: postgres://ford:${POSTGRES_PASSWORD", compose)
+        self.assertIn("FORD_BASE_URL: https://www.forduruapan.mx", compose)
+        self.assertIn("image: {{ mcp_candidate_image }}", override)
+        self.assertIn("-f \"{{ remote_root }}/mcp/migration-compose.yml\"", migration)
+        self.assertIn("run --rm --no-deps mcp node dist/src/cli.js migrate", migration)
+        self.assertIn("no_log: true", migration)
+
+    def test_initial_mcp_migration_uses_the_same_compose_environment_as_the_service(self):
+        tasks = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/main.yml"
+        ).read_text(encoding="utf-8")
+        migration_start = tasks.index("Run MCP catalog migrations once before starting the service")
+        migration_end = tasks.index("\n- name:", migration_start + 1)
+        migration = tasks[migration_start:migration_end]
+
+        self.assertIn("docker compose", migration)
+        self.assertIn("run --rm --no-deps mcp node dist/src/cli.js migrate", migration)
+        self.assertIn("no_log: true", migration)
+
+    def test_scheduler_candidate_is_healthy_before_the_mcp_route_switch(self):
+        source = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+        migration = source.index("Run catalog migrations once from the immutable candidate image")
+        candidate = source.index("Start the candidate MCP slot")
+        protocol = source.index("Verify candidate MCP protocol and tool contract")
+        scheduler = source.index("Start or update the monthly scraper scheduler candidate")
+        route = source.index("Start or reload the stable MCP proxy")
+
+        self.assertLess(migration, candidate)
+        self.assertLess(candidate, protocol)
+        self.assertLess(protocol, scheduler)
+        self.assertLess(scheduler, route)
+        self.assertIn("Restore the prior scheduler image in Compose", source)
+        self.assertIn("Stop the scheduler when no prior MCP release existed", source)
+
+    def test_blue_green_includes_a_private_monthly_scheduler_service(self):
+        source = (
+            ROOT
+            / "deployment/ansible/roles/mcp/templates/blue-green-compose.yml.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertRegex(source, r"(?m)^  scheduler:")
+        self.assertRegex(
+            source,
+            r'command:\s*\["node", "dist/src/cli\.js", "scheduler"\]',
+        )
+        self.assertIn("networks: [data_default]", source)
+        self.assertIn('SYNC_SCHEDULE: "0 12 1 * *"', source)
+        self.assertIn("SYNC_TIMEZONE: America/Mexico_City", source)
+        scheduler = source.split("\n  scheduler:", 1)[1].split("\n  mcp-proxy:", 1)[0]
+        self.assertNotIn("ports:", scheduler)
+
 
 if __name__ == "__main__":
     unittest.main()

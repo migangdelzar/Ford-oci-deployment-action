@@ -230,9 +230,10 @@
 - name: Run MCP catalog migrations once before starting the service
   ansible.builtin.command:
     cmd: >-
-      docker run --rm --network data_default
-      --env-file "{{ remote_root }}/mcp/.env"
-      "{{ mcp_image }}" node dist/src/cli.js migrate
+      docker compose --env-file "{{ remote_root }}/mcp/.env"
+      -f "{{ remote_root }}/mcp/compose.yml"
+      run --rm --no-deps mcp node dist/src/cli.js migrate
+  no_log: true
   changed_when: true
 
 - name: Start MCP and embedding service

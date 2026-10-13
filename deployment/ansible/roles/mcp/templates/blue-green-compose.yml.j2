@@ -23,6 +23,7 @@ services:
       MCP_HTTP_ALLOWED_HOSTS: ford-mcp.emme.business,${EMME_2_PRIVATE_IP},127.0.0.1,localhost
       MCP_HTTP_ALLOWED_ORIGINS: ""
       LANGFUSE_ENVIRONMENT: production
+    command: ["node", "dist/src/cli.js", "mcp-http"]
     ports:
       - "127.0.0.1:{{ mcp_blue_port }}:3001"
     networks: [data_default]
@@ -53,6 +54,7 @@ services:
     environment:
       <<: *mcp_environment
       DATABASE_URL: postgres://ford:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be supplied}@postgres:5432/ford_service?application_name=ford-mcp-green
+    command: ["node", "dist/src/cli.js", "mcp-http"]
     ports:
       - "127.0.0.1:{{ mcp_green_port }}:3001"
     networks: [data_default]
@@ -60,6 +62,42 @@ services:
       ollama-model:
         condition: service_completed_successfully
     healthcheck: *mcp_healthcheck
+
+  scheduler:
+    image: {{ mcp_scheduler_image }}
+    container_name: ford-scraping-scheduler
+    restart: unless-stopped
+    command: ["node", "dist/src/cli.js", "scheduler"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+    environment:
+      DATABASE_URL: postgres://ford:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be supplied}@postgres:5432/ford_service?application_name=ford-scraping-scheduler
+      FORD_BASE_URL: https://www.forduruapan.mx
+      EMBEDDING_PROVIDER: ollama
+      EMBEDDING_API_URL: http://ollama:11434/api/embed
+      EMBEDDING_MODEL: qllama/bge-m3:q8_0
+      EMBEDDING_DIMENSIONS: "1024"
+      CRAWL_MAX_PAGES: "1000"
+      SYNC_SCHEDULE: "0 12 1 * *"
+      SYNC_TIMEZONE: America/Mexico_City
+      LANGFUSE_ENVIRONMENT: production
+    networks: [data_default]
+    depends_on:
+      ollama-model:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "process.exit(require('node:fs').readFileSync('/proc/1/cmdline').toString().includes('scheduler') ? 0 : 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   mcp-proxy:
     image: {{ mcp_proxy_image }}
