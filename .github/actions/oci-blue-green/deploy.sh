@@ -38,6 +38,11 @@ if [[ "$OCI_TARGET" == "ford-mcp" ]]; then
     || fail "ford-mcp requires the existing VM private IPv4 address"
   python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$OCI_MCP_PRIVATE_IP" >/dev/null 2>&1 \
     || fail "ford-mcp requires a valid existing VM private IPv4 address"
+elif [[ "$OCI_TARGET" == "ford-service" ]]; then
+  [[ "$OCI_DATA_PRIVATE_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+    || fail "ford-service requires the existing data VM private IPv4 address"
+  python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$OCI_DATA_PRIVATE_IP" >/dev/null 2>&1 \
+    || fail "ford-service requires a valid existing data VM private IPv4 address"
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   if [[ "$OCI_TARGET" == "ford-service" ]]; then
@@ -94,6 +99,8 @@ host_vars = {
 }
 if target == "ford-mcp":
     host_vars["emme_2_private_ip"] = os.environ["OCI_MCP_PRIVATE_IP"]
+else:
+    host_vars["emme_2_private_ip"] = os.environ["OCI_DATA_PRIVATE_IP"]
 
 inventory = {"all": {"children": {group: {"hosts": {"release-target": host_vars}}}}}
 if target in ("ford-service", "ford-mcp") and operation == "deploy":
