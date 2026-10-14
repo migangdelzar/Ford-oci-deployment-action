@@ -38,15 +38,19 @@ if [[ "$OCI_TARGET" == "ford-mcp" ]]; then
     || fail "ford-mcp requires the existing VM private IPv4 address"
   python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$OCI_MCP_PRIVATE_IP" >/dev/null 2>&1 \
     || fail "ford-mcp requires a valid existing VM private IPv4 address"
-else
-  if [[ "$OCI_OPERATION" == "deploy" ]]; then
-    [[ -n "$OCI_BACKUP_HOST" && "$OCI_BACKUP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
+fi
+if [[ "$OCI_OPERATION" == "deploy" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" ]]; then
+    [[ -n "${OCI_BACKUP_HOST:-}" && "$OCI_BACKUP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
       || fail "ford-service deploy requires the existing data VM backup host"
     [[ -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]] \
       || fail "backup-ssh-private-key is required for ford-service deploy"
-    if [[ -n "$OCI_BACKUP_USER" ]]; then
-      [[ "$OCI_BACKUP_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || fail "backup-user must be a valid SSH account name"
-    fi
+  else
+    [[ -n "${OCI_BACKUP_HOST:-}" && "$OCI_BACKUP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
+      || fail "ford-mcp deploy requires the existing data VM backup host"
+  fi
+  if [[ -n "${OCI_BACKUP_USER:-}" ]]; then
+    [[ "$OCI_BACKUP_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || fail "backup-user must be a valid SSH account name"
   fi
 fi
 
@@ -92,7 +96,7 @@ if target == "ford-mcp":
     host_vars["emme_2_private_ip"] = os.environ["OCI_MCP_PRIVATE_IP"]
 
 inventory = {"all": {"children": {group: {"hosts": {"release-target": host_vars}}}}}
-if target == "ford-service" and operation == "deploy":
+if target in ("ford-service", "ford-mcp") and operation == "deploy":
     backup_host_vars = {
         "ansible_host": os.environ["OCI_BACKUP_HOST"],
         "ansible_user": os.environ.get("OCI_BACKUP_USER") or os.environ["OCI_DEPLOY_USER"],
@@ -135,7 +139,7 @@ export ANSIBLE_SSH_ARGS="-o UserKnownHostsFile=$TEMP_ROOT/ssh/known_hosts -o Str
 cd "$REPOSITORY_ROOT"
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   backup_key="$TEMP_ROOT/ssh/deploy_key"
-  if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" && -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]]; then
     backup_key="$TEMP_ROOT/ssh/backup_key"
   fi
   "$TEMP_ROOT/venv/bin/ansible-playbook" \

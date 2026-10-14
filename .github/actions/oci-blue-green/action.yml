@@ -24,7 +24,7 @@ inputs:
     description: SSH private key for the target VM (emme-1 for Ford Service, emme-2 for MCP).
     required: true
   backup-ssh-private-key:
-    description: Separate SSH private key for the existing data VM backup before Ford Service deploys.
+    description: Optional separate SSH private key for the existing data VM backup; MCP uses its deploy key when omitted.
     required: false
   ssh-known-hosts:
     description: Pinned known_hosts entries for the deployment host and, when needed, the data VM.
@@ -40,7 +40,7 @@ inputs:
     required: false
     default: /opt/ford
   backup-host:
-    description: Existing data VM host to back up before deploying Ford Service; also the MCP target host.
+    description: Existing data VM host to back up before Ford Service or MCP deploys.
     required: false
   backup-user:
     description: SSH user for the data VM; defaults to the deployment user.

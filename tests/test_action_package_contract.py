@@ -82,6 +82,58 @@ class ActionPackageContractTest(unittest.TestCase):
             with self.subTest(playbook=playbook):
                 self.assertTrue((ROOT / "deployment/ansible" / playbook).is_file())
 
+
+    def test_mcp_deploy_requires_existing_data_host_backup_credentials(self):
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "OCI_TARGET": "ford-mcp",
+                "OCI_IMAGE": "ghcr.io/example/ford-mcp@sha256:" + "a" * 64,
+                "OCI_OPERATION": "deploy",
+                "OCI_SOURCE_SHA": "c" * 40,
+                "OCI_DEPLOY_HOST": "203.0.113.10",
+                "OCI_DEPLOY_USER": "deploy",
+                "OCI_SSH_PRIVATE_KEY": "PRIVATE-KEY-SHOULD-NOT-LEAK",
+                "OCI_SSH_KNOWN_HOSTS": "203.0.113.10 ssh-ed25519 PUBLIC-HOST-KEY",
+                "OCI_REGISTRY_USERNAME": "release-bot",
+                "GHCR_TOKEN": "REGISTRY-TOKEN-SHOULD-NOT-LEAK",
+                "OCI_REMOTE_ROOT": "/opt/ford",
+                "OCI_MCP_PRIVATE_IP": "10.0.0.2",
+                "OCI_ACTION_VALIDATE_ONLY": "true",
+            }
+        )
+        missing = subprocess.run(
+            ["bash", str(DEPLOY_SCRIPT)], cwd=ROOT, env=environment,
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("ford-mcp deploy requires the existing data VM backup host", missing.stderr)
+
+        environment.update(
+            {
+                "OCI_BACKUP_HOST": "203.0.113.11",
+                "OCI_BACKUP_SSH_PRIVATE_KEY": "BACKUP-PRIVATE-KEY-SHOULD-NOT-LEAK",
+            }
+        )
+        valid = subprocess.run(
+            ["bash", str(DEPLOY_SCRIPT)], cwd=ROOT, env=environment,
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_mcp_deploy_runs_and_verifies_backup_before_ansible_migrations(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        backup_condition = script.index('if [[ "$OCI_OPERATION" == "deploy" ]]; then\n  backup_key=')
+        backup_playbook = script.index('deployment/ansible/backup-now.yml', backup_condition)
+        target_playbook = script.index('"$PLAYBOOK"', backup_playbook)
+        self.assertLess(backup_playbook, target_playbook)
+        backup_inventory = script[script.index('if target == "ford-mcp":'):script.index('extra_vars = {')]
+        self.assertIn('os.environ["OCI_BACKUP_HOST"]', backup_inventory)
+        self.assertIn('os.environ.get("OCI_BACKUP_USER") or os.environ["OCI_DEPLOY_USER"]', backup_inventory)
+        self.assertIn('if target in ("ford-service", "ford-mcp") and operation == "deploy":', backup_inventory)
+        self.assertIn('if [[ "$OCI_TARGET" == "ford-service" && -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]]; then', script)
+        self.assertIn('backup_key="$TEMP_ROOT/ssh/backup_key"', script)
+
     def test_mcp_compose_templates_select_the_http_command(self):
         templates = (
             ROOT / "deployment/ansible/roles/mcp/templates/compose.yml.j2",

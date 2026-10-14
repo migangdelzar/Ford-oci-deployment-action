@@ -31,8 +31,11 @@ steps:
       mcp-private-ip: ${{ vars.OCI_MCP_PRIVATE_IP }}
 ```
 
-The Ford Service target also requires `backup-host` and
-`backup-ssh-private-key`. `operation: rollback` restores only the previously
+Both Ford Service and Ford MCP deploys require `backup-host` so the action
+runs and verifies the existing PostgreSQL and Redis backup before applying
+release changes. Ford Service also requires `backup-ssh-private-key` because
+its backup runs on emme-2; MCP already runs on emme-2 and uses its deployment
+SSH key by default. `operation: rollback` restores only the previously
 recorded immutable image; it does not revert database migrations.
 
 ## Local checks
