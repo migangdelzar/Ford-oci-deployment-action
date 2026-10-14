@@ -28,6 +28,7 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_BACKUP_HOST": "203.0.113.11",
                 "OCI_BACKUP_USER": "deploy",
                 "OCI_MCP_PRIVATE_IP": "10.0.0.2",
+                "OCI_DATA_PRIVATE_IP": "10.0.0.3",
                 "OCI_ACTION_VALIDATE_ONLY": "true",
             }
         )
@@ -45,6 +46,35 @@ class ActionPackageContractTest(unittest.TestCase):
         result = self.validate_action()
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_service_deploy_requires_the_existing_database_private_ip(self):
+        missing = self.validate_action(OCI_DATA_PRIVATE_IP="")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn(
+            "ford-service requires the existing data VM private IPv4 address",
+            missing.stderr,
+        )
+
+        malformed = self.validate_action(OCI_DATA_PRIVATE_IP="999.999.999.999")
+        self.assertNotEqual(malformed.returncode, 0)
+        self.assertIn(
+            "ford-service requires a valid existing data VM private IPv4 address",
+            malformed.stderr,
+        )
+
+    def test_service_inventory_uses_the_data_private_ip(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'host_vars["emme_2_private_ip"] = os.environ["OCI_DATA_PRIVATE_IP"]',
+            script,
+        )
+        self.assertIn("data-private-ip:", action)
+        self.assertIn(
+            "OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}",
+            action,
+        )
 
     def test_action_rejects_mutable_images(self):
         result = self.validate_action(OCI_IMAGE="ghcr.io/example/ford-service:latest")
