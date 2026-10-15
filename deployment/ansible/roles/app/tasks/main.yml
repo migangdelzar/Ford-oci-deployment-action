@@ -4,6 +4,53 @@
     that: [app_image is defined, app_image | length > 0]
     fail_msg: "Pass app_image from the deployment task."
 
+- name: Require managed observability configuration before changing the active host
+  ansible.builtin.assert:
+    that:
+      - service_source_root is defined
+      - grafana_cloud_otlp_endpoint is defined and grafana_cloud_otlp_endpoint | length > 0
+      - grafana_cloud_instance_id is defined and grafana_cloud_instance_id | length > 0
+      - grafana_cloud_api_token_secret_ocid is defined and grafana_cloud_api_token_secret_ocid | length > 0
+      - langfuse_otlp_endpoint is defined and langfuse_otlp_endpoint | length > 0
+      - langfuse_public_key is defined and langfuse_public_key | length > 0
+      - langfuse_secret_key_secret_ocid is defined and langfuse_secret_key_secret_ocid | length > 0
+    fail_msg: "Configure the Ford Service observability endpoints, public identifiers, and OCI Vault secret OCIDs before deploying."
+
+- name: Install OCI CLI for Instance Principal observability secret reads
+  ansible.builtin.import_role:
+    name: backup
+    tasks_from: install-oci-cli.yml
+  become: true
+
+- name: Read observability credentials from OCI Vault without exposing values
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/oci
+      - secrets
+      - secret-bundle
+      - get
+      - --auth
+      - instance_principal
+      - --secret-id
+      - "{{ item.ocid }}"
+      - --query
+      - 'data."secret-bundle-content".content'
+      - --raw-output
+  loop:
+    - name: grafana
+      ocid: "{{ grafana_cloud_api_token_secret_ocid }}"
+    - name: langfuse
+      ocid: "{{ langfuse_secret_key_secret_ocid }}"
+  register: observability_secret_bundles
+  changed_when: false
+  no_log: true
+
+- name: Set observability credentials for the collector template
+  ansible.builtin.set_fact:
+    grafana_cloud_api_token: "{{ observability_secret_bundles.results[0].stdout | trim | b64decode }}"
+    langfuse_secret_key: "{{ observability_secret_bundles.results[1].stdout | trim | b64decode }}"
+  no_log: true
+
 - name: Detect the Docker data directory
   ansible.builtin.command:
     cmd: "docker info --format '{% raw %}{{.DockerRootDir}}{% endraw %}'"
@@ -71,7 +118,7 @@
 
 - name: Copy Grafana Cloud Collector configuration
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../observability/otel-collector/grafana-cloud-config.yaml"
+    src: "{{ service_source_root }}/deployment/observability/otel-collector/grafana-cloud-config.yaml"
     dest: "{{ remote_root }}/app/grafana-cloud-config.yaml"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"

@@ -51,6 +51,24 @@ inputs:
   data-private-ip:
     description: Existing data VM private IP used by the Ford Service for PostgreSQL and Redis.
     required: false
+  grafana-cloud-otlp-endpoint:
+    description: Grafana Cloud OTLP endpoint for the Ford Service Collector.
+    required: false
+  grafana-cloud-instance-id:
+    description: Grafana Cloud OTLP instance ID.
+    required: false
+  grafana-cloud-api-token-secret-ocid:
+    description: OCI Vault secret OCID for the Grafana Cloud API token.
+    required: false
+  langfuse-otlp-endpoint:
+    description: Langfuse Cloud OTLP endpoint for redacted traces.
+    required: false
+  langfuse-public-key:
+    description: Langfuse public project key.
+    required: false
+  langfuse-secret-key-secret-ocid:
+    description: OCI Vault secret OCID for the Langfuse secret key.
+    required: false
 runs:
   using: composite
   steps:
@@ -73,4 +91,11 @@ runs:
         OCI_BACKUP_USER: ${{ inputs['backup-user'] }}
         OCI_MCP_PRIVATE_IP: ${{ inputs['mcp-private-ip'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
+        OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
+        OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
+        OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID: ${{ inputs['grafana-cloud-api-token-secret-ocid'] }}
+        OCI_LANGFUSE_OTLP_ENDPOINT: ${{ inputs['langfuse-otlp-endpoint'] }}
+        OCI_LANGFUSE_PUBLIC_KEY: ${{ inputs['langfuse-public-key'] }}
+        OCI_LANGFUSE_SECRET_KEY_SECRET_OCID: ${{ inputs['langfuse-secret-key-secret-ocid'] }}
+        OCI_SERVICE_SOURCE_ROOT: ${{ github.workspace }}
       run: ${{ github.action_path }}/deploy.sh
