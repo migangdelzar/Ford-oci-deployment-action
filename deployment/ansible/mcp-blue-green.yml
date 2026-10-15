@@ -2,9 +2,11 @@
 - name: Deploy Ford catalog MCP with a local blue-green proxy
   hosts: data
   become: true
-  roles:
-    - role: mcp
-      tasks_from: blue-green.yml
+  tasks:
+    - name: Run Ford MCP blue-green deployment tasks
+      ansible.builtin.import_role:
+        name: mcp
+        tasks_from: blue-green.yml
   post_tasks:
     - name: Fetch redacted MCP release metadata for the deployment summary
       ansible.builtin.fetch:

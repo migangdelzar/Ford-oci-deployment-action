@@ -42,3 +42,9 @@ jobs:
           export ANSIBLE_ROLES_PATH="$GITHUB_WORKSPACE/deployment/ansible/roles"
           ansible-playbook -i "$inventory" deployment/ansible/app-blue-green.yml --syntax-check
           ansible-playbook -i "$inventory" deployment/ansible/mcp-blue-green.yml --syntax-check
+          app_tasks="$RUNNER_TEMP/app-ansible-tasks.txt"
+          mcp_tasks="$RUNNER_TEMP/mcp-ansible-tasks.txt"
+          ansible-playbook -i "$inventory" deployment/ansible/app-blue-green.yml --list-tasks | tee "$app_tasks"
+          ansible-playbook -i "$inventory" deployment/ansible/mcp-blue-green.yml --list-tasks | tee "$mcp_tasks"
+          grep -Fq 'app : Validate blue-green Ford Service inputs' "$app_tasks"
+          grep -Fq 'mcp : Validate blue-green MCP deployment inputs' "$mcp_tasks"
