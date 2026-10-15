@@ -40,8 +40,12 @@ release changes. Ford Service also requires `backup-ssh-private-key` because
 its backup runs on emme-2; MCP already runs on emme-2 and uses its deployment
 SSH key by default. Ford Service must pass `data-private-ip` for the existing
 emme-2 address so Ansible can render PostgreSQL and Redis endpoints; the MCP
-target continues to use `mcp-private-ip`. `operation: rollback` restores only the previously
-recorded immutable image; it does not revert database migrations.
+target continues to use `mcp-private-ip`. `operation: rollback` restores only
+the previously recorded image; it does not revert database migrations. When a
+first blue-green deployment replaces a legacy container that has no registry
+digest, the action tags that exact local image ID on the VM and records the tag
+as the rollback image. Rollback verifies that local image exists before using
+it, and does not try to pull the local tag from GHCR.
 
 Ford Service callers must check out the Service `main` branch in the deployment
 job because the Collector configuration is stored there. Configure production

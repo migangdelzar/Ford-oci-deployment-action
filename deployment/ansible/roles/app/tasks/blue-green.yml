@@ -47,11 +47,26 @@
     fail_msg: "Expected at most one legacy Ford Service listener on port 8080; refusing an ambiguous traffic switch."
   when: not app_release_state_file.stat.exists
 
-- name: Read the current legacy Ford Service image digest
+- name: Read the legacy Ford Service container image ID
   ansible.builtin.command:
-    cmd: docker inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ app_legacy_listener.stdout_lines[0] }}"
-  register: app_legacy_image_result
+    cmd: docker inspect --format {% raw %}'{{.Image}}'{% endraw %} "{{ app_legacy_listener.stdout_lines[0] }}"
+  register: app_legacy_container_image
   changed_when: false
+  when:
+    - not app_release_state_file.stat.exists
+    - app_legacy_listener.stdout_lines | length > 0
+
+- name: Name the locally retained legacy Ford Service image
+  ansible.builtin.set_fact:
+    app_legacy_image_reference: "ford-service-legacy:legacy-{{ app_legacy_container_image.stdout | regex_replace('^sha256:', '') }}"
+  when:
+    - not app_release_state_file.stat.exists
+    - app_legacy_listener.stdout_lines | length > 0
+
+- name: Tag the legacy Ford Service image for rollback
+  ansible.builtin.command:
+    cmd: docker image tag "{{ app_legacy_container_image.stdout }}" "{{ app_legacy_image_reference }}"
+  changed_when: true
   when:
     - not app_release_state_file.stat.exists
     - app_legacy_listener.stdout_lines | length > 0
@@ -60,31 +75,34 @@
   ansible.builtin.set_fact:
     app_release_state: "{{ (app_release_state_raw.content | b64decode | from_json) if app_release_state_file.stat.exists else {} }}"
     app_current_slot: "{{ (app_release_state_raw.content | b64decode | from_json).active_slot if app_release_state_file.stat.exists else ('legacy' if app_legacy_listener.stdout_lines | default([]) | length > 0 else 'none') }}"
-    app_current_image: "{{ (app_release_state_raw.content | b64decode | from_json).active_image if app_release_state_file.stat.exists else (app_legacy_image_result.stdout_lines[0] if app_legacy_image_result is defined and app_legacy_image_result.stdout_lines | length > 0 else '') }}"
+    app_current_image: "{{ (app_release_state_raw.content | b64decode | from_json).active_image if app_release_state_file.stat.exists else (app_legacy_image_reference if app_legacy_image_reference is defined else '') }}"
 
 - name: Validate existing Ford Service state and rollback target
   ansible.builtin.assert:
     that:
       - app_current_slot in ['blue', 'green', 'legacy', 'none']
-      - not app_release_state_file.stat.exists or app_release_state.active_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
-      - app_operation | default('deploy') != 'rollback' or (app_release_state_file.stat.exists and app_release_state.previous_slot in ['blue', 'green'] and app_release_state.previous_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
-      - app_current_slot != 'legacy' or app_current_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
-    fail_msg: "Ford Service rollback requires the previously recorded immutable image; legacy images without registry digests cannot be safely retained."
+      - not app_release_state_file.stat.exists or app_release_state.active_image is match('^(ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}|ford-service-legacy:legacy-[a-f0-9]{64})$')
+      - app_operation | default('deploy') != 'rollback' or (app_release_state_file.stat.exists and app_release_state.previous_slot in ['blue', 'green'] and app_release_state.previous_image is match('^(ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}|ford-service-legacy:legacy-[a-f0-9]{64})$'))
+      - app_current_slot != 'legacy' or app_current_image is match('^ford-service-legacy:legacy-[a-f0-9]{64}$')
+    fail_msg: "Ford Service rollback requires a recorded immutable registry digest or locally retained image ID."
 
 - name: Select candidate Ford Service slot and image
   ansible.builtin.set_fact:
-    app_candidate_slot: "{{ app_release_state.previous_slot if (app_operation | default('deploy')) == 'rollback' else ('green' if app_current_slot == 'blue' else 'blue') }}"
     app_candidate_image: "{{ app_release_state.previous_image if (app_operation | default('deploy')) == 'rollback' else app_image }}"
+    app_candidate_slot: "{{ app_release_state.previous_slot if (app_operation | default('deploy')) == 'rollback' else ('green' if app_current_slot == 'blue' else 'blue') }}"
     app_previous_slot: "{{ app_current_slot if app_current_slot in ['blue', 'green'] else ('green' if app_current_slot == 'legacy' else '') }}"
     app_previous_image: "{{ app_release_state.active_image if app_release_state_file.stat.exists else (app_current_image if app_current_image | length > 0 else (app_image if app_image is defined else '')) }}"
-    app_candidate_port: "{{ (app_blue_port | default(18081) | int) if ((app_release_state.previous_slot if (app_operation | default('deploy')) == 'rollback' else ('green' if app_current_slot == 'blue' else 'blue')) == 'blue' else (app_green_port | default(18082) | int) }}"
+
+- name: Select candidate Ford Service port
+  ansible.builtin.set_fact:
+    app_candidate_port: "{{ (app_blue_port | default(18081) | int) if app_candidate_slot == 'blue' else (app_green_port | default(18082) | int) }}"
 
 - name: Validate selected Ford Service candidate identity
   ansible.builtin.assert:
     that:
-      - app_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
-      - app_operation | default('deploy') != 'rollback' or app_image | default(app_candidate_image) == app_candidate_image
-    fail_msg: "The selected Ford Service candidate must be an immutable image digest."
+      - app_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$') or ((app_operation | default('deploy')) == 'rollback' and app_candidate_image is match('^ford-service-legacy:legacy-[a-f0-9]{64}$'))
+      - app_operation | default('deploy') != 'rollback' or app_image | default(app_candidate_image) == app_candidate_image or app_candidate_image is match('^ford-service-legacy:legacy-[a-f0-9]{64}$')
+    fail_msg: "The selected Ford Service candidate must be an immutable registry digest or the recorded local legacy image."
 
 - name: Confirm the provisioned application network exists
   ansible.builtin.command:
@@ -190,13 +208,23 @@
         path: "{{ app_registry_config.path }}"
         state: absent
       when: app_registry_config is defined and app_registry_config.path is defined
-  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+  when:
+    - app_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
 
 - name: Pull the immutable Ford Service candidate without registry credentials
   ansible.builtin.command:
     cmd: docker pull "{{ app_candidate_image }}"
   changed_when: true
-  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+  when:
+    - app_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+
+- name: Verify locally retained Ford Service rollback image
+  ansible.builtin.command:
+    cmd: docker image inspect "{{ app_candidate_image }}"
+  changed_when: false
+  when: app_candidate_image is match('^ford-service-legacy:legacy-[a-f0-9]{64}$')
 
 - name: Start candidate Ford Service slot
   ansible.builtin.command:

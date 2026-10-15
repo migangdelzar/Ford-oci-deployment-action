@@ -56,11 +56,17 @@
     - not mcp_release_state_file.stat.exists
     - mcp_legacy_listener.stdout_lines | length > 0
 
-- name: Read the current legacy MCP image digest
+- name: Name the locally retained legacy MCP image
+  ansible.builtin.set_fact:
+    mcp_legacy_image_reference: "ford-mcp-legacy:legacy-{{ mcp_legacy_container_image.stdout | regex_replace('^sha256:', '') }}"
+  when:
+    - not mcp_release_state_file.stat.exists
+    - mcp_legacy_listener.stdout_lines | length > 0
+
+- name: Tag the legacy MCP image for rollback
   ansible.builtin.command:
-    cmd: docker image inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ mcp_legacy_container_image.stdout }}"
-  register: mcp_legacy_image_result
-  changed_when: false
+    cmd: docker image tag "{{ mcp_legacy_container_image.stdout }}" "{{ mcp_legacy_image_reference }}"
+  changed_when: true
   when:
     - not mcp_release_state_file.stat.exists
     - mcp_legacy_listener.stdout_lines | length > 0
@@ -69,16 +75,16 @@
   ansible.builtin.set_fact:
     mcp_release_state: "{{ (mcp_release_state_raw.content | b64decode | from_json) if mcp_release_state_file.stat.exists else {} }}"
     mcp_current_slot: "{{ (mcp_release_state_raw.content | b64decode | from_json).active_slot if mcp_release_state_file.stat.exists else ('legacy' if mcp_legacy_listener.stdout_lines | default([]) | length > 0 else 'none') }}"
-    mcp_current_image: "{{ (mcp_release_state_raw.content | b64decode | from_json).active_image if mcp_release_state_file.stat.exists else (mcp_legacy_image_result.stdout_lines[0] if mcp_legacy_image_result is defined and mcp_legacy_image_result.stdout_lines | length > 0 else '') }}"
+    mcp_current_image: "{{ (mcp_release_state_raw.content | b64decode | from_json).active_image if mcp_release_state_file.stat.exists else (mcp_legacy_image_reference if mcp_legacy_image_reference is defined else '') }}"
 
 - name: Validate existing MCP state and rollback target
   ansible.builtin.assert:
     that:
       - mcp_current_slot in ['blue', 'green', 'legacy', 'none']
-      - not mcp_release_state_file.stat.exists or mcp_release_state.active_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
-      - mcp_operation | default('deploy') != 'rollback' or (mcp_release_state_file.stat.exists and mcp_release_state.previous_slot in ['blue', 'green'] and mcp_release_state.previous_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
-      - mcp_current_slot != 'legacy' or (mcp_legacy_image_result.stdout_lines | default([]) | length > 0)
-    fail_msg: "MCP rollback is allowed only to the previously recorded immutable slot."
+      - not mcp_release_state_file.stat.exists or mcp_release_state.active_image is match('^(ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}|ford-mcp-legacy:legacy-[a-f0-9]{64})$')
+      - mcp_operation | default('deploy') != 'rollback' or (mcp_release_state_file.stat.exists and mcp_release_state.previous_slot in ['blue', 'green'] and mcp_release_state.previous_image is match('^(ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}|ford-mcp-legacy:legacy-[a-f0-9]{64})$'))
+      - mcp_current_slot != 'legacy' or mcp_current_image is match('^ford-mcp-legacy:legacy-[a-f0-9]{64}$')
+    fail_msg: "MCP rollback requires a recorded immutable registry digest or locally retained image ID."
 
 - name: Select candidate slot and image
   ansible.builtin.set_fact:
@@ -86,14 +92,17 @@
     mcp_candidate_image: "{{ mcp_release_state.previous_image if (mcp_operation | default('deploy')) == 'rollback' else mcp_image }}"
     mcp_previous_slot: "{{ mcp_current_slot if mcp_current_slot in ['blue', 'green'] else ('green' if mcp_current_slot == 'legacy' else '') }}"
     mcp_previous_image: "{{ mcp_release_state.active_image if mcp_release_state_file.stat.exists else (mcp_current_image if mcp_current_image | length > 0 else (mcp_image if mcp_image is defined else mcp_release_state.previous_image)) }}"
-    mcp_candidate_port: "{{ (mcp_blue_port | default(3101) | int) if ((mcp_release_state.previous_slot if (mcp_operation | default('deploy')) == 'rollback' else ('green' if mcp_current_slot == 'blue' else 'blue')) == 'blue' else (mcp_green_port | default(3102) | int) }}"
+
+- name: Select candidate MCP port
+  ansible.builtin.set_fact:
+    mcp_candidate_port: "{{ (mcp_blue_port | default(3101) | int) if mcp_candidate_slot == 'blue' else (mcp_green_port | default(3102) | int) }}"
 
 - name: Validate current slot and requested rollback identity
   ansible.builtin.assert:
     that:
-      - mcp_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
-      - mcp_operation | default('deploy') != 'rollback' or mcp_image | default(mcp_candidate_image) == mcp_candidate_image
-    fail_msg: "The selected MCP candidate must be the recorded immutable image."
+      - mcp_candidate_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$') or ((mcp_operation | default('deploy')) == 'rollback' and mcp_candidate_image is match('^ford-mcp-legacy:legacy-[a-f0-9]{64}$'))
+      - mcp_operation | default('deploy') != 'rollback' or mcp_image | default(mcp_candidate_image) == mcp_candidate_image or mcp_candidate_image is match('^ford-mcp-legacy:legacy-[a-f0-9]{64}$')
+    fail_msg: "The selected MCP candidate must be an immutable registry digest or the recorded local legacy image."
 
 - name: Render blue-green MCP Compose file
   ansible.builtin.template:
@@ -162,13 +171,23 @@
         path: "{{ mcp_registry_config.path }}"
         state: absent
       when: mcp_registry_config is defined and mcp_registry_config.path is defined
-  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+  when:
+    - mcp_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
 
 - name: Pull the immutable MCP candidate without registry credentials
   ansible.builtin.command:
     cmd: docker pull "{{ mcp_candidate_image }}"
   changed_when: true
-  when: lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+  when:
+    - mcp_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length == 0
+
+- name: Verify locally retained MCP rollback image
+  ansible.builtin.command:
+    cmd: docker image inspect "{{ mcp_candidate_image }}"
+  changed_when: false
+  when: mcp_candidate_image is match('^ford-mcp-legacy:legacy-[a-f0-9]{64}$')
 
 - name: Render the candidate image override for the migration run
   ansible.builtin.template:

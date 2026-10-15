@@ -3,6 +3,9 @@ import os
 import subprocess
 from pathlib import Path
 
+import jinja2
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = ROOT / ".github/actions/oci-blue-green/deploy.sh"
@@ -269,17 +272,82 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('redis_tmp="/tmp/ford-backup-${run_id}.rdb"', source)
         self.assertIn('REDIS_BACKUP_PATH="$redis_tmp"', source)
 
-    def test_legacy_mcp_image_digest_is_read_from_image_not_container_metadata(self):
+    def test_legacy_mcp_rollback_uses_the_container_image_id(self):
         source = (
             ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
         ).read_text(encoding="utf-8")
 
         self.assertIn("Read the legacy MCP container image ID", source)
-        self.assertIn("docker image inspect --format", source)
+        self.assertIn("{{.Image}}", source)
         self.assertIn("mcp_legacy_container_image.stdout", source)
-        self.assertNotIn(
-            'docker inspect --format {% raw %}\'{{range .RepoDigests}}', source
-        )
+        self.assertIn("docker image tag", source)
+        self.assertIn("ford-mcp-legacy:legacy-", source)
+        self.assertNotIn("RepoDigests", source)
+        self.assertIn("^ford-mcp-legacy:legacy-[a-f0-9]{64}$", source)
+        self.assertIn("mcp_candidate_image is match('^ghcr", source)
+        self.assertIn("mcp_operation | default('deploy') == 'rollback'", source)
+        self.assertIn("mcp_candidate_image is match('^ghcr[.]io/')", source)
+
+    def test_legacy_service_rollback_uses_the_container_image_id(self):
+        source = (
+            ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Read the legacy Ford Service container image ID", source)
+        self.assertIn("{{.Image}}", source)
+        self.assertIn("app_legacy_container_image.stdout", source)
+        self.assertIn("docker image tag", source)
+        self.assertIn("ford-service-legacy:legacy-", source)
+        self.assertIn("app_current_slot != 'legacy' or app_current_image is match('^ford-service-legacy:legacy-", source)
+        self.assertIn("app_operation | default('deploy') == 'rollback'", source)
+        self.assertIn("app_candidate_image is match('^ghcr[.]io/')", source)
+
+    def test_candidate_ports_are_selected_from_resolved_slots(self):
+        for role, variable, blue_port, green_port in (
+            ("app", "app", 18081, 18082),
+            ("mcp", "mcp", 3101, 3102),
+        ):
+            with self.subTest(role=role):
+                tasks = yaml.safe_load(
+                    (
+                        ROOT
+                        / f"deployment/ansible/roles/{role}/tasks/blue-green.yml"
+                    ).read_text(encoding="utf-8")
+                )
+                task_label = (
+                    "Select candidate Ford Service port"
+                    if role == "app"
+                    else "Select candidate MCP port"
+                )
+                port_task = next(
+                    task
+                    for task in tasks
+                    if task.get("name") == task_label
+                )
+                expression = port_task["ansible.builtin.set_fact"][
+                    f"{variable}_candidate_port"
+                ]
+                template = jinja2.Environment().from_string(expression)
+                self.assertEqual(
+                    str(blue_port),
+                    template.render(
+                        **{
+                            f"{variable}_candidate_slot": "blue",
+                            f"{variable}_blue_port": blue_port,
+                            f"{variable}_green_port": green_port,
+                        }
+                    ),
+                )
+                self.assertEqual(
+                    str(green_port),
+                    template.render(
+                        **{
+                            f"{variable}_candidate_slot": "green",
+                            f"{variable}_blue_port": blue_port,
+                            f"{variable}_green_port": green_port,
+                        }
+                    ),
+                )
 
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (

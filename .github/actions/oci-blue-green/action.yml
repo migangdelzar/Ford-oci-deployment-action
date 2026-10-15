@@ -5,7 +5,7 @@ inputs:
     description: Deployment target (ford-service or ford-mcp).
     required: true
   image:
-    description: Immutable GHCR digest for deploy. Rollback resolves the recorded prior digest.
+    description: Immutable GHCR digest for deploy. Rollback resolves the recorded prior image.
     required: false
   operation:
     description: deploy or rollback.
