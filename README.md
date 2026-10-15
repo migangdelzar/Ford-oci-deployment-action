@@ -11,7 +11,9 @@ database, model-provider, Meta, and observability credentials on the target
 runtime; secret values are not action inputs. The Service caller passes
 observability endpoints, public identifiers, and Vault secret OCIDs. The action
 reads Grafana and Langfuse credentials directly from OCI Vault on emme-1 using
-the VM's Instance Principal.
+the VM's Instance Principal. It also requires the existing Service operator
+login email as the non-secret `operator-username` input; the action validates
+it and passes it to the runtime template instead of inventing a username.
 
 ```yaml
 permissions:
@@ -51,6 +53,7 @@ Ford Service callers must check out the Service `main` branch in the deployment
 job because the Collector configuration is stored there. Configure production
 environment variables for `GRAFANA_CLOUD_OTLP_ENDPOINT`,
 `GRAFANA_CLOUD_INSTANCE_ID`, `LANGFUSE_OTLP_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`,
+`FORD_OPERATOR_USERNAME`,
 `FORD_VAULT_SECRET_OCID_GRAFANA_CLOUD_API_TOKEN`, and
 `FORD_VAULT_SECRET_OCID_LANGFUSE_SECRET_KEY`. The emme-1 Instance Principal
 must have `read secret-bundles` access to those two Vault secrets. Secret values

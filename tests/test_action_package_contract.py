@@ -32,6 +32,7 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_BACKUP_USER": "deploy",
                 "OCI_MCP_PRIVATE_IP": "10.0.0.2",
                 "OCI_DATA_PRIVATE_IP": "10.0.0.3",
+                "OCI_OPERATOR_USERNAME": "operator@example.test",
                 "OCI_ACTION_VALIDATE_ONLY": "true",
                 "OCI_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
@@ -68,6 +69,25 @@ class ActionPackageContractTest(unittest.TestCase):
             malformed.stderr,
         )
 
+    def test_service_deploy_requires_a_valid_operator_login_email(self):
+        missing = self.validate_action(OCI_OPERATOR_USERNAME="")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("ford-service requires a valid operator login email", missing.stderr)
+
+        malformed = self.validate_action(OCI_OPERATOR_USERNAME="operator")
+        self.assertNotEqual(malformed.returncode, 0)
+        self.assertIn("ford-service requires a valid operator login email", malformed.stderr)
+
+    def test_service_operator_login_email_is_passed_to_ansible(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("operator-username:", action)
+        self.assertIn("OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}", action)
+        self.assertIn('"ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"]', script)
+
     def test_service_inventory_uses_the_data_private_ip(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
@@ -77,6 +97,7 @@ class ActionPackageContractTest(unittest.TestCase):
             script,
         )
         self.assertIn("data-private-ip:", action)
+        self.assertIn("operator-username:", action)
         self.assertIn(
             "OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}",
             action,
@@ -513,12 +534,12 @@ class ActionPackageContractTest(unittest.TestCase):
                     context_copy_task["ansible.builtin.copy"]["src"],
                 )
 
-    def test_app_environment_defaults_operator_username_for_action_deployments(self):
+    def test_app_environment_does_not_invent_an_operator_login_email(self):
         template = (
             ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("ford_operator_username | default('operator')", template)
+        self.assertIn("ford_operator_username | default('')", template)
 
     def test_on_demand_backup_installs_oci_cli_before_running_backup_script(self):
         source = (ROOT / "deployment/ansible/backup-now.yml").read_text(
