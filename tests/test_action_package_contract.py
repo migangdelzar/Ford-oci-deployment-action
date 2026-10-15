@@ -153,6 +153,26 @@ class ActionPackageContractTest(unittest.TestCase):
             with self.subTest(playbook=playbook):
                 self.assertTrue((ROOT / "deployment/ansible" / playbook).is_file())
 
+    def test_blue_green_playbooks_import_the_blue_green_role_tasks(self):
+        playbooks = (("app-blue-green.yml", "app"), ("mcp-blue-green.yml", "mcp"))
+        for playbook, role in playbooks:
+            with self.subTest(playbook=playbook):
+                source = (ROOT / "deployment/ansible" / playbook).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("ansible.builtin.import_role:", source)
+                self.assertIn(f"name: {role}", source)
+                self.assertIn("tasks_from: blue-green.yml", source)
+                self.assertNotIn("\n  roles:", source)
+
+    def test_action_ci_checks_selected_playbooks_list_blue_green_tasks(self):
+        source = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        self.assertIn("deployment/ansible/app-blue-green.yml --list-tasks", source)
+        self.assertIn("deployment/ansible/mcp-blue-green.yml --list-tasks", source)
+        self.assertIn("Validate blue-green Ford Service inputs", source)
+        self.assertIn("Validate blue-green MCP deployment inputs", source)
+
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (
             ROOT / "deployment/ansible/roles/app/templates/app.env.j2"

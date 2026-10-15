@@ -2,9 +2,11 @@
 - name: Deploy Ford Service with a local blue-green proxy
   hosts: app
   become: false
-  roles:
-    - role: app
-      tasks_from: blue-green.yml
+  tasks:
+    - name: Run Ford Service blue-green deployment tasks
+      ansible.builtin.import_role:
+        name: app
+        tasks_from: blue-green.yml
   post_tasks:
     - name: Fetch redacted Ford Service release metadata for the deployment summary
       ansible.builtin.fetch:
