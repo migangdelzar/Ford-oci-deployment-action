@@ -112,6 +112,13 @@ class ActionPackageContractTest(unittest.TestCase):
             with self.subTest(playbook=playbook):
                 self.assertTrue((ROOT / "deployment/ansible" / playbook).is_file())
 
+    def test_app_environment_defaults_operator_username_for_action_deployments(self):
+        template = (
+            ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ford_operator_username | default('operator')", template)
+
     def test_on_demand_backup_installs_oci_cli_before_running_backup_script(self):
         source = (ROOT / "deployment/ansible/backup-now.yml").read_text(
             encoding="utf-8"
