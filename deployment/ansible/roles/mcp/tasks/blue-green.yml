@@ -8,8 +8,19 @@
       - (mcp_blue_port | default(3101) | int) != (mcp_green_port | default(3102) | int)
       - (mcp_blue_port | default(3101) | int) != 3001
       - (mcp_green_port | default(3102) | int) != 3001
-      - (remote_root ~ '/mcp/.env') is file
     fail_msg: "Blue-green MCP requires immutable image digests, distinct slot ports, and the provisioned MCP environment file."
+
+- name: Check the provisioned MCP environment file on the target host
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/mcp/.env"
+  register: mcp_runtime_env_file
+
+- name: Require the provisioned MCP environment file
+  ansible.builtin.assert:
+    that:
+      - mcp_runtime_env_file.stat.exists
+      - mcp_runtime_env_file.stat.isreg
+    fail_msg: "The provisioned MCP environment file is missing on the target host."
 
 - name: Check blue-green MCP deployment state
   ansible.builtin.stat:
