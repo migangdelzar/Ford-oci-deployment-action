@@ -133,6 +133,26 @@
   vars:
     mcp_active_port: "{{ mcp_candidate_port }}"
 
+- name: Resolve mcp Docker client config directory
+  ansible.builtin.set_fact:
+    mcp_docker_config_path: "{{ ansible_env.DOCKER_CONFIG | default(ansible_env.HOME ~ '/.docker', true) }}"
+  when:
+    - mcp_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Check mcp Docker context directory
+  ansible.builtin.stat:
+    path: "{{ mcp_docker_config_path }}/contexts"
+  register: mcp_docker_context_directory
+  when: mcp_docker_config_path is defined
+
+- name: Capture mcp Docker context for temporary GHCR config
+  ansible.builtin.command:
+    cmd: docker context show
+  register: mcp_docker_context_name
+  changed_when: false
+  when: mcp_docker_config_path is defined
+
 - name: Pull the candidate with temporary GHCR credentials
   block:
     - name: Create temporary registry credential directory
@@ -141,6 +161,22 @@
         path: /tmp
         prefix: ford-mcp-ghcr-
       register: mcp_registry_config
+
+    - name: Preserve mcp Docker context in temporary GHCR config
+      ansible.builtin.copy:
+        src: "{{ mcp_docker_config_path }}/contexts/"
+        dest: "{{ mcp_registry_config.path }}/contexts/"
+        remote_src: true
+        mode: preserve
+      when: mcp_docker_context_directory.stat.isdir | default(false)
+      no_log: true
+
+    - name: Write mcp isolated Docker CLI config
+      ansible.builtin.copy:
+        content: "{{ {'currentContext': mcp_docker_context_name.stdout} | to_nice_json }}"
+        dest: "{{ mcp_registry_config.path }}/config.json"
+        mode: "0600"
+      no_log: true
 
     - name: Authenticate to GHCR for the candidate pull
       ansible.builtin.command:

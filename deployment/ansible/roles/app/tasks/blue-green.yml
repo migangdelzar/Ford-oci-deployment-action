@@ -171,6 +171,26 @@
   vars:
     app_active_port: "{{ app_candidate_port }}"
 
+- name: Resolve app Docker client config directory
+  ansible.builtin.set_fact:
+    app_docker_config_path: "{{ ansible_env.DOCKER_CONFIG | default(ansible_env.HOME ~ '/.docker', true) }}"
+  when:
+    - app_candidate_image is match('^ghcr[.]io/')
+    - lookup('ansible.builtin.env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Check app Docker context directory
+  ansible.builtin.stat:
+    path: "{{ app_docker_config_path }}/contexts"
+  register: app_docker_context_directory
+  when: app_docker_config_path is defined
+
+- name: Capture app Docker context for temporary GHCR config
+  ansible.builtin.command:
+    cmd: docker context show
+  register: app_docker_context_name
+  changed_when: false
+  when: app_docker_config_path is defined
+
 - name: Pull candidate with temporary GHCR credentials
   block:
     - name: Create temporary registry credential directory
@@ -179,6 +199,22 @@
         path: /tmp
         prefix: ford-app-ghcr-
       register: app_registry_config
+
+    - name: Preserve app Docker context in temporary GHCR config
+      ansible.builtin.copy:
+        src: "{{ app_docker_config_path }}/contexts/"
+        dest: "{{ app_registry_config.path }}/contexts/"
+        remote_src: true
+        mode: preserve
+      when: app_docker_context_directory.stat.isdir | default(false)
+      no_log: true
+
+    - name: Write app isolated Docker CLI config
+      ansible.builtin.copy:
+        content: "{{ {'currentContext': app_docker_context_name.stdout} | to_nice_json }}"
+        dest: "{{ app_registry_config.path }}/config.json"
+        mode: "0600"
+      no_log: true
 
     - name: Authenticate to GHCR for the candidate pull
       ansible.builtin.command:
