@@ -100,7 +100,7 @@ services:
       start_period: 15s
 
   mcp-proxy:
-    image: {{ mcp_proxy_image }}
+    image: {{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}
     container_name: ford-mcp-proxy
     restart: unless-stopped
     network_mode: host

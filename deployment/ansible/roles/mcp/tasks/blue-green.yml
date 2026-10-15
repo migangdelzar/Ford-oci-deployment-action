@@ -93,9 +93,14 @@
     mcp_previous_slot: "{{ mcp_current_slot if mcp_current_slot in ['blue', 'green'] else ('green' if mcp_current_slot == 'legacy' else '') }}"
     mcp_previous_image: "{{ mcp_release_state.active_image if mcp_release_state_file.stat.exists else (mcp_current_image if mcp_current_image | length > 0 else (mcp_image if mcp_image is defined else mcp_release_state.previous_image)) }}"
 
+- name: Resolve mcp blue-green slot ports
+  ansible.builtin.set_fact:
+    mcp_blue_port_resolved: "{{ mcp_blue_port | default(3101) | int }}"
+    mcp_green_port_resolved: "{{ mcp_green_port | default(3102) | int }}"
+
 - name: Select candidate MCP port
   ansible.builtin.set_fact:
-    mcp_candidate_port: "{{ (mcp_blue_port | default(3101) | int) if mcp_candidate_slot == 'blue' else (mcp_green_port | default(3102) | int) }}"
+    mcp_candidate_port: "{{ mcp_blue_port_resolved if mcp_candidate_slot == 'blue' else mcp_green_port_resolved }}"
 
 - name: Validate current slot and requested rollback identity
   ansible.builtin.assert:
@@ -114,11 +119,8 @@
   vars:
     mcp_image: "{{ mcp_candidate_image }}"
     mcp_scheduler_image: "{{ mcp_candidate_image }}"
-    mcp_previous_image: "{{ mcp_previous_image }}"
-    mcp_candidate_slot: "{{ mcp_candidate_slot }}"
-    mcp_proxy_image: "{{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
-    mcp_blue_port: "{{ mcp_blue_port | default(3101) }}"
-    mcp_green_port: "{{ mcp_green_port | default(3102) }}"
+    mcp_blue_port: "{{ mcp_blue_port_resolved }}"
+    mcp_green_port: "{{ mcp_green_port_resolved }}"
   no_log: true
 
 - name: Render candidate MCP proxy route
@@ -296,7 +298,7 @@
 
 - name: Wait for the retained MCP rollback slot health
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ (mcp_blue_port | default(3101) | int) if mcp_previous_slot == 'blue' else (mcp_green_port | default(3102) | int) }}/mcp"
+    url: "http://127.0.0.1:{{ mcp_blue_port_resolved if mcp_previous_slot == 'blue' else mcp_green_port_resolved }}/mcp"
     status_code: 401
     timeout: 10
   register: mcp_previous_slot_health
@@ -412,10 +414,8 @@
           vars:
             mcp_image: "{{ mcp_candidate_image }}"
             mcp_scheduler_image: "{{ mcp_current_image }}"
-            mcp_candidate_slot: "{{ mcp_candidate_slot }}"
-            mcp_proxy_image: "{{ mcp_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
-            mcp_blue_port: "{{ mcp_blue_port | default(3101) }}"
-            mcp_green_port: "{{ mcp_green_port | default(3102) }}"
+            mcp_blue_port: "{{ mcp_blue_port_resolved }}"
+            mcp_green_port: "{{ mcp_green_port_resolved }}"
           when: mcp_current_image | length > 0
           no_log: true
 

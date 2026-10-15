@@ -333,8 +333,8 @@ class ActionPackageContractTest(unittest.TestCase):
                     template.render(
                         **{
                             f"{variable}_candidate_slot": "blue",
-                            f"{variable}_blue_port": blue_port,
-                            f"{variable}_green_port": green_port,
+                            f"{variable}_blue_port_resolved": blue_port,
+                            f"{variable}_green_port_resolved": green_port,
                         }
                     ),
                 )
@@ -343,11 +343,74 @@ class ActionPackageContractTest(unittest.TestCase):
                     template.render(
                         **{
                             f"{variable}_candidate_slot": "green",
-                            f"{variable}_blue_port": blue_port,
-                            f"{variable}_green_port": green_port,
+                            f"{variable}_blue_port_resolved": blue_port,
+                            f"{variable}_green_port_resolved": green_port,
                         }
                     ),
                 )
+
+    def test_compose_templates_use_nonrecursive_resolved_port_defaults(self):
+        for role, variable, blue_port, green_port, render_label in (
+            ("app", "app", 18081, 18082, "Render blue-green Ford Service Compose file"),
+            ("mcp", "mcp", 3101, 3102, "Render blue-green MCP Compose file"),
+        ):
+            with self.subTest(role=role):
+                tasks = yaml.safe_load(
+                    (
+                        ROOT
+                        / f"deployment/ansible/roles/{role}/tasks/blue-green.yml"
+                    ).read_text(encoding="utf-8")
+                )
+                resolve_task = next(
+                    task
+                    for task in tasks
+                    if task.get("name") == f"Resolve {role} blue-green slot ports"
+                )
+                self.assertEqual(
+                    f"{{{{ {variable}_blue_port | default({blue_port}) | int }}}}",
+                    resolve_task["ansible.builtin.set_fact"][
+                        f"{variable}_blue_port_resolved"
+                    ],
+                )
+                render_task = next(
+                    task for task in tasks if task.get("name") == render_label
+                )
+                template = jinja2.Environment().from_string(
+                    render_task["vars"][f"{variable}_blue_port"]
+                )
+                self.assertEqual(
+                    str(blue_port),
+                    template.render(
+                        **{f"{variable}_blue_port_resolved": blue_port}
+                    ),
+                )
+                self.assertNotIn(
+                    f"{variable}_blue_port | default",
+                    render_task["vars"][f"{variable}_blue_port"],
+                )
+
+    def test_task_variables_do_not_recursively_reference_their_own_names(self):
+        for role in ("app", "mcp"):
+            with self.subTest(role=role):
+                tasks = yaml.safe_load(
+                    (
+                        ROOT
+                        / f"deployment/ansible/roles/{role}/tasks/blue-green.yml"
+                    ).read_text(encoding="utf-8")
+                )
+                pending = list(tasks)
+                while pending:
+                    task = pending.pop()
+                    pending.extend(task.get("block", []))
+                    pending.extend(task.get("rescue", []))
+                    pending.extend(task.get("always", []))
+                    for name, expression in task.get("vars", {}).items():
+                        if isinstance(expression, str):
+                            self.assertNotRegex(
+                                expression,
+                                rf"{{{{\s*{name}(?:\s|\|)",
+                                f"{role} task '{task.get('name')}' recursively scopes {name}",
+                            )
 
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (
