@@ -112,6 +112,25 @@ class ActionPackageContractTest(unittest.TestCase):
             with self.subTest(playbook=playbook):
                 self.assertTrue((ROOT / "deployment/ansible" / playbook).is_file())
 
+    def test_on_demand_backup_installs_oci_cli_before_running_backup_script(self):
+        source = (ROOT / "deployment/ansible/backup-now.yml").read_text(
+            encoding="utf-8"
+        )
+        installer = (
+            ROOT / "deployment/ansible/roles/backup/tasks/install-oci-cli.yml"
+        ).read_text(encoding="utf-8")
+
+        install = source.index("tasks_from: install-oci-cli.yml")
+        backup = source.index("Create a verified PostgreSQL and Redis backup")
+
+        self.assertLess(install, backup)
+        self.assertIn("ansible.builtin.import_role:", source)
+        self.assertIn("name: backup", source)
+        self.assertIn(
+            "Verify OCI CLI is available for Object Storage uploads", installer
+        )
+        self.assertIn("cmd: oci --version", installer)
+
 
     def test_mcp_deploy_requires_existing_data_host_backup_credentials(self):
         environment = os.environ.copy()

@@ -1,0 +1,17 @@
+---
+- name: Install OCI CLI prerequisites
+  ansible.builtin.dnf:
+    name: python3-pip
+    state: present
+    update_cache: true
+
+- name: Install OCI CLI for Instance Principal backups
+  ansible.builtin.pip:
+    name: "oci-cli=={{ backup_oci_cli_version | default('3.94.0') }}"
+    executable: pip3
+    state: present
+
+- name: Verify OCI CLI is available for Object Storage uploads
+  ansible.builtin.command:
+    cmd: oci --version
+  changed_when: false

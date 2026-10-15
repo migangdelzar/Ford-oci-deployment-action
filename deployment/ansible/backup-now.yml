@@ -4,6 +4,11 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Ensure OCI CLI is ready for Instance Principal uploads
+      ansible.builtin.import_role:
+        name: backup
+        tasks_from: install-oci-cli.yml
+
     - name: Create a verified PostgreSQL and Redis backup before release changes
       ansible.builtin.command:
         cmd: "{{ remote_root }}/backup/backup-databases.sh"
