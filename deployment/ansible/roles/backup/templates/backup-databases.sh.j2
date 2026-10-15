@@ -9,7 +9,9 @@ bucket="{{ backup_bucket }}"
 namespace="{{ object_storage_namespace }}"
 object_prefix="{{ backup_object_prefix | default('ford/backups') }}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_dir="$staging_root/$timestamp"
+run_id="${timestamp}-$(date +%s%N)-$$"
+run_dir="$staging_root/$run_id"
+redis_tmp="/tmp/ford-backup-${run_id}.rdb"
 
 mkdir -p "$backup_root" "$run_dir"
 cleanup() {
@@ -17,15 +19,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-postgres_archive="$run_dir/ford_service_${timestamp}.dump.gz"
-redis_archive="$run_dir/redis_${timestamp}.rdb.gz"
-manifest="$run_dir/manifest_${timestamp}.json"
+postgres_archive="$run_dir/ford_service_${run_id}.dump.gz"
+redis_archive="$run_dir/redis_${run_id}.rdb.gz"
+manifest="$run_dir/manifest_${run_id}.json"
 
 docker compose --env-file "$env_file" -f "$compose_file" exec -T postgres \
   pg_dump -U ford -d ford_service --format=custom --no-owner | gzip -9 > "$postgres_archive"
 
-docker compose --env-file "$env_file" -f "$compose_file" exec -T redis sh -c \
-  'set -e; redis-cli --no-auth-warning -a "$REDIS_PASSWORD" --rdb /tmp/ford-backup.rdb >/dev/null; cat /tmp/ford-backup.rdb; rm -f /tmp/ford-backup.rdb' \
+docker compose --env-file "$env_file" -f "$compose_file" exec -T \
+  -e REDIS_BACKUP_PATH="$redis_tmp" redis sh -c \
+  'set -e; redis-cli --no-auth-warning -a "$REDIS_PASSWORD" --rdb "$REDIS_BACKUP_PATH" >/dev/null; cat "$REDIS_BACKUP_PATH"; rm -f "$REDIS_BACKUP_PATH"' \
   | gzip -9 > "$redis_archive"
 
 sha256_postgres="$(sha256sum "$postgres_archive" | awk '{print $1}')"

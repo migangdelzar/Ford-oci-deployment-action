@@ -238,6 +238,27 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("Read observability credentials from OCI Vault", source)
         self.assertIn("Read MCP runtime credentials from OCI Vault", source)
 
+    def test_mcp_environment_file_is_checked_on_the_remote_host(self):
+        source = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("path: \"{{ remote_root }}/mcp/.env\"", source)
+        self.assertIn("register: mcp_runtime_env_file", source)
+        self.assertIn("mcp_runtime_env_file.stat.exists", source)
+        self.assertNotIn("(remote_root ~ '/mcp/.env') is file", source)
+
+    def test_backup_staging_and_redis_dump_paths_are_unique_per_invocation(self):
+        source = (
+            ROOT
+            / "deployment/ansible/roles/backup/templates/backup-databases.sh.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('run_id="${timestamp}-$(date +%s%N)-$$"', source)
+        self.assertIn('run_dir="$staging_root/$run_id"', source)
+        self.assertIn('redis_tmp="/tmp/ford-backup-${run_id}.rdb"', source)
+        self.assertIn('REDIS_BACKUP_PATH="$redis_tmp"', source)
+
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (
             ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
