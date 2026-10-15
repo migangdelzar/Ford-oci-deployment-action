@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - mcp_image is defined
-      - mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$')
+      - mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
       - lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) | length > 0
       - lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') | default('', true) | length > 0
       - mcp_catalog_dump_path is defined
