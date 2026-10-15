@@ -88,6 +88,23 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}", action)
         self.assertIn('"ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"]', script)
 
+    def test_service_ui_upstream_is_passed_to_ansible_environment(self):
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+        template = (
+            ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ui-upstream-url:", action)
+        self.assertIn("default: https://emme-crm-ui.pages.dev", action)
+        self.assertIn(
+            "FORD_WEB_UI_UPSTREAM_URL: ${{ inputs['ui-upstream-url'] }}", action
+        )
+        self.assertIn(
+            "default('https://emme-crm-ui.pages.dev', true)", template
+        )
+
     def test_service_inventory_uses_the_data_private_ip(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")

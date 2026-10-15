@@ -14,6 +14,10 @@ reads Grafana and Langfuse credentials directly from OCI Vault on emme-1 using
 the VM's Instance Principal. It also requires the existing Service operator
 login email as the non-secret `operator-username` input; the action validates
 it and passes it to the runtime template instead of inventing a username.
+For Ford Service, pass the `ui-upstream-url` input to select the Cloudflare
+Pages origin. It defaults to `https://emme-crm-ui.pages.dev`; production callers
+can set it from the `FORD_WEB_UI_UPSTREAM_URL` environment variable to preserve
+an explicit rollback override.
 
 ```yaml
 permissions:
