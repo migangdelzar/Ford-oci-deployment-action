@@ -48,6 +48,15 @@ inputs:
   mcp-private-ip:
     description: Existing MCP VM private IP used in the stable listener configuration.
     required: false
+  secrets-provider:
+    description: Runtime secret provider used by the deployment (oci-vault).
+    required: false
+  postgres-password-secret-ocid:
+    description: OCI Vault secret OCID for the MCP database password.
+    required: false
+  mcp-http-bearer-token-secret-ocid:
+    description: OCI Vault secret OCID for the MCP HTTP bearer token.
+    required: false
   data-private-ip:
     description: Existing data VM private IP used by the Ford Service for PostgreSQL and Redis.
     required: false
@@ -90,6 +99,10 @@ runs:
         OCI_BACKUP_HOST: ${{ inputs['backup-host'] }}
         OCI_BACKUP_USER: ${{ inputs['backup-user'] }}
         OCI_MCP_PRIVATE_IP: ${{ inputs['mcp-private-ip'] }}
+        OCI_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}
+        FORD_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}
+        OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID: ${{ inputs['postgres-password-secret-ocid'] }}
+        OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
         OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
         OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
