@@ -262,6 +262,20 @@ class ActionPackageContractTest(unittest.TestCase):
                     r'command:\s*\["node", "dist/src/cli\.js", "mcp-http"\]',
                 )
 
+    def test_mcp_role_accepts_the_immutable_digest_used_by_release_workflows(self):
+        source = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/main.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')",
+            source,
+        )
+        self.assertNotIn(
+            "mcp_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$')",
+            source,
+        )
+
     def test_blue_green_runs_catalog_migrations_before_starting_mcp(self):
         source = (
             ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
