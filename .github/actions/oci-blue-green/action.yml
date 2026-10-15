@@ -60,6 +60,9 @@ inputs:
   data-private-ip:
     description: Existing data VM private IP used by the Ford Service for PostgreSQL and Redis.
     required: false
+  operator-username:
+    description: Email address for the Ford Service password-login operator.
+    required: false
   grafana-cloud-otlp-endpoint:
     description: Grafana Cloud OTLP endpoint for the Ford Service Collector.
     required: false
@@ -104,6 +107,7 @@ runs:
         OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID: ${{ inputs['postgres-password-secret-ocid'] }}
         OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
+        OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}
         OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
         OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
         OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID: ${{ inputs['grafana-cloud-api-token-secret-ocid'] }}
