@@ -128,9 +128,11 @@ class ActionPackageContractTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         install = source.index("tasks_from: install-oci-cli.yml")
+        install_timer = source.index("tasks_from: install-timer.yml")
         backup = source.index("Create a verified PostgreSQL and Redis backup")
 
         self.assertLess(install, backup)
+        self.assertLess(install_timer, backup)
         self.assertIn("ansible.builtin.import_role:", source)
         self.assertIn("name: backup", source)
         self.assertIn(
@@ -141,6 +143,13 @@ class ActionPackageContractTest(unittest.TestCase):
             source,
             r"environment:\s*\n\s+PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin",
         )
+        timer_tasks = (
+            ROOT / "deployment/ansible/roles/backup/tasks/install-timer.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("src: ford-backup.timer.j2", timer_tasks)
+        self.assertIn("dest: /etc/systemd/system/ford-backup.timer", timer_tasks)
+        self.assertIn("daemon_reload: true", timer_tasks)
+        self.assertIn("state: restarted", timer_tasks)
 
 
     def test_mcp_deploy_requires_existing_data_host_backup_credentials(self):

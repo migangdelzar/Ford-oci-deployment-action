@@ -9,6 +9,11 @@
         name: backup
         tasks_from: install-oci-cli.yml
 
+    - name: Apply the monthly backup timer before release changes
+      ansible.builtin.import_role:
+        name: backup
+        tasks_from: install-timer.yml
+
     - name: Create a verified PostgreSQL and Redis backup before release changes
       ansible.builtin.command:
         cmd: "{{ remote_root }}/backup/backup-databases.sh"
