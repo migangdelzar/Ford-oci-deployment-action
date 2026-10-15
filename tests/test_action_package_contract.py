@@ -146,10 +146,14 @@ class ActionPackageContractTest(unittest.TestCase):
         timer_tasks = (
             ROOT / "deployment/ansible/roles/backup/tasks/install-timer.yml"
         ).read_text(encoding="utf-8")
+        timer_template = (
+            ROOT / "deployment/ansible/roles/backup/templates/ford-backup.timer.j2"
+        ).read_text(encoding="utf-8")
         self.assertIn("src: ford-backup.timer.j2", timer_tasks)
         self.assertIn("dest: /etc/systemd/system/ford-backup.timer", timer_tasks)
         self.assertIn("daemon_reload: true", timer_tasks)
         self.assertIn("state: restarted", timer_tasks)
+        self.assertIn("OnCalendar=*-*-01 03:15:00 UTC", timer_template)
 
 
     def test_mcp_deploy_requires_existing_data_host_backup_credentials(self):

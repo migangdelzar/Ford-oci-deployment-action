@@ -1,8 +1,8 @@
 [Unit]
-Description=Daily Ford database backup
+Description=Monthly Ford database backup
 
 [Timer]
-OnCalendar=*-*-* 03:15:00 UTC
+OnCalendar=*-*-01 03:15:00 UTC
 Persistent=true
 RandomizedDelaySec=15m
 Unit=ford-backup.service
