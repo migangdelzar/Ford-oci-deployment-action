@@ -412,6 +412,107 @@ class ActionPackageContractTest(unittest.TestCase):
                                 f"{role} task '{task.get('name')}' recursively scopes {name}",
                             )
 
+    def test_temporary_registry_config_preserves_the_active_docker_context(self):
+        for role in ("app", "mcp"):
+            with self.subTest(role=role):
+                tasks = yaml.safe_load(
+                    (
+                        ROOT
+                        / f"deployment/ansible/roles/{role}/tasks/blue-green.yml"
+                    ).read_text(encoding="utf-8")
+                )
+                flattened_tasks = []
+
+                def collect_nested_tasks(task_list):
+                    for task in task_list:
+                        flattened_tasks.append(task)
+                        for key in ("block", "rescue", "always"):
+                            collect_nested_tasks(task.get(key, []))
+
+                collect_nested_tasks(tasks)
+                resolve_name = f"Resolve {role} Docker client config directory"
+                resolve_task = next(
+                    task
+                    for task in flattened_tasks
+                    if task.get("name") == resolve_name
+                )
+                config_var = f"{role}_docker_config_path"
+                self.assertIn(
+                    "ansible_env.DOCKER_CONFIG",
+                    resolve_task["ansible.builtin.set_fact"][config_var],
+                )
+                self.assertIn(
+                    "ansible_env.HOME",
+                    resolve_task["ansible.builtin.set_fact"][config_var],
+                )
+
+                context_name = f"Capture {role} Docker context for temporary GHCR config"
+                capture_task = next(
+                    task
+                    for task in flattened_tasks
+                    if task.get("name") == context_name
+                )
+                self.assertEqual(
+                    "docker context show",
+                    capture_task["ansible.builtin.command"]["cmd"],
+                )
+
+                context_copy_name = (
+                    f"Preserve {role} Docker context in temporary GHCR config"
+                )
+                context_copy_task = next(
+                    task
+                    for task in flattened_tasks
+                    if task.get("name") == context_copy_name
+                )
+                config_write_name = (
+                    f"Write {role} isolated Docker CLI config"
+                )
+                config_write_task = next(
+                    task
+                    for task in flattened_tasks
+                    if task.get("name") == config_write_name
+                )
+                login_index = next(
+                    index
+                    for index, task in enumerate(flattened_tasks)
+                    if task.get("name")
+                    == f"Authenticate to GHCR for the candidate pull"
+                )
+                resolve_index = flattened_tasks.index(resolve_task)
+                capture_index = flattened_tasks.index(capture_task)
+                for copy_task in (context_copy_task, config_write_task):
+                    self.assertLess(flattened_tasks.index(copy_task), login_index)
+                    self.assertTrue(copy_task["no_log"])
+                    self.assertIn(
+                        f"{role}_registry_config.path",
+                        copy_task["ansible.builtin.copy"]["dest"],
+                    )
+                self.assertLess(resolve_index, capture_index)
+                self.assertLess(capture_index, login_index)
+                self.assertLess(
+                    flattened_tasks.index(context_copy_task),
+                    flattened_tasks.index(config_write_task),
+                )
+                self.assertTrue(
+                    context_copy_task["ansible.builtin.copy"]["remote_src"]
+                )
+                self.assertTrue(config_write_task["ansible.builtin.copy"]["content"])
+                self.assertEqual(
+                    "0600",
+                    config_write_task["ansible.builtin.copy"]["mode"],
+                )
+                config_content = config_write_task["ansible.builtin.copy"]["content"]
+                self.assertIn("currentContext", config_content)
+                self.assertNotRegex(
+                    config_content,
+                    r"auths|credHelpers|credsStore",
+                )
+                self.assertEqual(
+                    f"{{{{ {config_var} }}}}/contexts/",
+                    context_copy_task["ansible.builtin.copy"]["src"],
+                )
+
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (
             ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
