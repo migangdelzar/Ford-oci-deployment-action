@@ -13,5 +13,5 @@
 
 - name: Verify OCI CLI is available for Object Storage uploads
   ansible.builtin.command:
-    cmd: oci --version
+    cmd: /usr/local/bin/oci --version
   changed_when: false

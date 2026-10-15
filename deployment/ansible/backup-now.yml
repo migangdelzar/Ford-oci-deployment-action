@@ -12,6 +12,8 @@
     - name: Create a verified PostgreSQL and Redis backup before release changes
       ansible.builtin.command:
         cmd: "{{ remote_root }}/backup/backup-databases.sh"
+      environment:
+        PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin
       register: release_backup
       async: 1800
       poll: 10

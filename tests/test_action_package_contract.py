@@ -129,7 +129,11 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn(
             "Verify OCI CLI is available for Object Storage uploads", installer
         )
-        self.assertIn("cmd: oci --version", installer)
+        self.assertIn("cmd: /usr/local/bin/oci --version", installer)
+        self.assertRegex(
+            source,
+            r"environment:\s*\n\s+PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin",
+        )
 
 
     def test_mcp_deploy_requires_existing_data_host_backup_credentials(self):
