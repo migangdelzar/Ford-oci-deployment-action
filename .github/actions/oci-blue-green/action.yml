@@ -63,6 +63,10 @@ inputs:
   operator-username:
     description: Email address for the Ford Service password-login operator.
     required: false
+  ui-upstream-url:
+    description: Cloudflare Pages origin proxied by Ford Service for browser UI routes and assets.
+    required: false
+    default: https://emme-crm-ui.pages.dev
   grafana-cloud-otlp-endpoint:
     description: Grafana Cloud OTLP endpoint for the Ford Service Collector.
     required: false
@@ -108,6 +112,7 @@ runs:
         OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
         OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}
+        FORD_WEB_UI_UPSTREAM_URL: ${{ inputs['ui-upstream-url'] }}
         OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
         OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
         OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID: ${{ inputs['grafana-cloud-api-token-secret-ocid'] }}
