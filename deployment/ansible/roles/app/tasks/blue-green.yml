@@ -47,10 +47,10 @@
     fail_msg: "Expected at most one legacy Ford Service listener on port 8080; refusing an ambiguous traffic switch."
   when: not app_release_state_file.stat.exists
 
-- name: Read the legacy Ford Service container image ID
+- name: Read the legacy Ford Service container ID
   ansible.builtin.command:
-    cmd: docker inspect --format {% raw %}'{{.Image}}'{% endraw %} "{{ app_legacy_listener.stdout_lines[0] }}"
-  register: app_legacy_container_image
+    cmd: docker inspect --format {% raw %}'{{.Id}}'{% endraw %} "{{ app_legacy_listener.stdout_lines[0] }}"
+  register: app_legacy_container_id
   changed_when: false
   when:
     - not app_release_state_file.stat.exists
@@ -58,14 +58,16 @@
 
 - name: Name the locally retained legacy Ford Service image
   ansible.builtin.set_fact:
-    app_legacy_image_reference: "ford-service-legacy:legacy-{{ app_legacy_container_image.stdout | regex_replace('^sha256:', '') }}"
+    app_legacy_image_reference: "ford-service-legacy:legacy-{{ app_legacy_container_id.stdout | regex_replace('^sha256:', '') }}"
   when:
     - not app_release_state_file.stat.exists
     - app_legacy_listener.stdout_lines | length > 0
 
-- name: Tag the legacy Ford Service image for rollback
+- name: Commit the running legacy Ford Service container for rollback
   ansible.builtin.command:
-    cmd: docker image tag "{{ app_legacy_container_image.stdout }}" "{{ app_legacy_image_reference }}"
+    # The pre-Vault container has resolved credentials in its runtime config.
+    # Keep this snapshot local so its legacy runtime remains a valid rollback.
+    cmd: docker commit --pause=false "{{ app_legacy_listener.stdout_lines[0] }}" "{{ app_legacy_image_reference }}"
   changed_when: true
   when:
     - not app_release_state_file.stat.exists

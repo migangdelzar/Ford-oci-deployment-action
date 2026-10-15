@@ -309,19 +309,32 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("mcp_operation | default('deploy') == 'rollback'", source)
         self.assertIn("mcp_candidate_image is match('^ghcr[.]io/')", source)
 
-    def test_legacy_service_rollback_uses_the_container_image_id(self):
-        source = (
-            ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
-        ).read_text(encoding="utf-8")
+    def test_legacy_service_rollback_snapshots_running_runtime_configuration(self):
+        tasks = yaml.safe_load(
+            (
+                ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+            ).read_text(encoding="utf-8")
+        )
+        source = str(tasks)
 
-        self.assertIn("Read the legacy Ford Service container image ID", source)
-        self.assertIn("{{.Image}}", source)
-        self.assertIn("app_legacy_container_image.stdout", source)
-        self.assertIn("docker image tag", source)
+        self.assertIn("Read the legacy Ford Service container ID", source)
+        self.assertIn("{{.Id}}", source)
+        self.assertIn("app_legacy_container_id.stdout", source)
+        self.assertIn("docker commit --pause=false", source)
+        self.assertIn("Commit the running legacy Ford Service container for rollback", source)
         self.assertIn("ford-service-legacy:legacy-", source)
         self.assertIn("app_current_slot != 'legacy' or app_current_image is match('^ford-service-legacy:legacy-", source)
         self.assertIn("app_operation | default('deploy') == 'rollback'", source)
         self.assertIn("app_candidate_image is match('^ghcr[.]io/')", source)
+
+        self.assertLess(
+            source.index("Commit the running legacy Ford Service container for rollback"),
+            source.index("Start candidate Ford Service slot"),
+        )
+        self.assertLess(
+            source.index("Commit the running legacy Ford Service container for rollback"),
+            source.index("Stop the legacy Ford Service container before binding the stable listener"),
+        )
 
     def test_candidate_ports_are_selected_from_resolved_slots(self):
         for role, variable, blue_port, green_port in (
