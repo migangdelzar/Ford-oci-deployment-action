@@ -248,6 +248,16 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("mcp_runtime_env_file.stat.exists", source)
         self.assertNotIn("(remote_root ~ '/mcp/.env') is file", source)
 
+    def test_service_environment_file_is_checked_on_the_remote_host(self):
+        source = (
+            ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("path: \"{{ remote_root }}/app/.env\"", source)
+        self.assertIn("register: app_runtime_env_file", source)
+        self.assertIn("app_runtime_env_file.stat.exists", source)
+        self.assertNotIn("(remote_root ~ '/app/.env') is file", source)
+
     def test_backup_staging_and_redis_dump_paths_are_unique_per_invocation(self):
         source = (
             ROOT
@@ -258,6 +268,18 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('run_dir="$staging_root/$run_id"', source)
         self.assertIn('redis_tmp="/tmp/ford-backup-${run_id}.rdb"', source)
         self.assertIn('REDIS_BACKUP_PATH="$redis_tmp"', source)
+
+    def test_legacy_mcp_image_digest_is_read_from_image_not_container_metadata(self):
+        source = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Read the legacy MCP container image ID", source)
+        self.assertIn("docker image inspect --format", source)
+        self.assertIn("mcp_legacy_container_image.stdout", source)
+        self.assertNotIn(
+            'docker inspect --format {% raw %}\'{{range .RepoDigests}}', source
+        )
 
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (

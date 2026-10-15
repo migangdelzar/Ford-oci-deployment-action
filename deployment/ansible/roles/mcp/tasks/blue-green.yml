@@ -47,9 +47,18 @@
     fail_msg: "Expected at most one legacy MCP listener on port 3001; refusing an ambiguous traffic switch."
   when: not mcp_release_state_file.stat.exists
 
-- name: Read the current legacy MCP image
+- name: Read the legacy MCP container image ID
   ansible.builtin.command:
-    cmd: docker inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ mcp_legacy_listener.stdout_lines[0] }}"
+    cmd: docker inspect --format {% raw %}'{{.Image}}'{% endraw %} "{{ mcp_legacy_listener.stdout_lines[0] }}"
+  register: mcp_legacy_container_image
+  changed_when: false
+  when:
+    - not mcp_release_state_file.stat.exists
+    - mcp_legacy_listener.stdout_lines | length > 0
+
+- name: Read the current legacy MCP image digest
+  ansible.builtin.command:
+    cmd: docker image inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} "{{ mcp_legacy_container_image.stdout }}"
   register: mcp_legacy_image_result
   changed_when: false
   when:

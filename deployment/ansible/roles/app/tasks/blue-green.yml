@@ -8,8 +8,19 @@
       - (app_blue_port | default(18081) | int) != (app_green_port | default(18082) | int)
       - (app_blue_port | default(18081) | int) != 8080
       - (app_green_port | default(18082) | int) != 8080
-      - (remote_root ~ '/app/.env') is file
     fail_msg: "Blue-green Ford Service requires immutable image digests, distinct slot ports, and the provisioned application environment file."
+
+- name: Check the provisioned Ford Service environment file on the target host
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/app/.env"
+  register: app_runtime_env_file
+
+- name: Require the provisioned Ford Service environment file
+  ansible.builtin.assert:
+    that:
+      - app_runtime_env_file.stat.exists
+      - app_runtime_env_file.stat.isreg
+    fail_msg: "The provisioned Ford Service environment file is missing on the target host."
 
 - name: Check blue-green Ford Service deployment state
   ansible.builtin.stat:
