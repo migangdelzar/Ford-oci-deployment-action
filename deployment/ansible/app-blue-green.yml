@@ -3,6 +3,10 @@
   hosts: app
   become: false
   tasks:
+    - name: Configure Ford Service Vault-backed runtime and Collector files
+      ansible.builtin.import_role:
+        name: app
+        tasks_from: configure-observability.yml
     - name: Run Ford Service blue-green deployment tasks
       ansible.builtin.import_role:
         name: app

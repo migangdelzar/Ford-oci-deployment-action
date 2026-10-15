@@ -38,6 +38,11 @@ if [[ "$OCI_TARGET" == "ford-mcp" ]]; then
     || fail "ford-mcp requires the existing VM private IPv4 address"
   python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$OCI_MCP_PRIVATE_IP" >/dev/null 2>&1 \
     || fail "ford-mcp requires a valid existing VM private IPv4 address"
+  [[ "${OCI_SECRETS_PROVIDER:-}" == "oci-vault" ]] \
+    || fail "ford-mcp requires OCI Vault runtime secret references"
+  [[ "${OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
+    && "${OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+    || fail "ford-mcp requires OCI Vault runtime secret references"
 elif [[ "$OCI_TARGET" == "ford-service" ]]; then
   [[ "$OCI_DATA_PRIVATE_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
     || fail "ford-service requires the existing data VM private IPv4 address"
@@ -143,7 +148,12 @@ if target == "ford-service":
         extra_vars["app_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/app-blue-green.yml"
 else:
-    extra_vars["mcp_operation"] = operation
+    extra_vars.update({
+        "mcp_operation": operation,
+        "mcp_secrets_provider": os.environ["OCI_SECRETS_PROVIDER"],
+        "mcp_postgres_password_secret_ocid": os.environ["OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID"],
+        "mcp_http_bearer_token_secret_ocid": os.environ["OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID"],
+    })
     if os.environ["OCI_IMAGE"]:
         extra_vars["mcp_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/mcp-blue-green.yml"

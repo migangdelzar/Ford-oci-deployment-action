@@ -48,3 +48,5 @@ jobs:
           ansible-playbook -i "$inventory" deployment/ansible/mcp-blue-green.yml --list-tasks | tee "$mcp_tasks"
           grep -Fq 'app : Validate blue-green Ford Service inputs' "$app_tasks"
           grep -Fq 'mcp : Validate blue-green MCP deployment inputs' "$mcp_tasks"
+          grep -Fq 'app : Read observability credentials from OCI Vault' "$app_tasks"
+          grep -Fq 'mcp : Read MCP runtime credentials from OCI Vault' "$mcp_tasks"

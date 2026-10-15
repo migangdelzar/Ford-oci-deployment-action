@@ -1,0 +1,74 @@
+---
+- name: Validate MCP OCI Vault runtime configuration
+  ansible.builtin.assert:
+    that:
+      - mcp_secrets_provider == 'oci-vault'
+      - mcp_postgres_password_secret_ocid is match('^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$')
+      - mcp_http_bearer_token_secret_ocid is match('^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$')
+      - emme_2_private_ip is defined
+    fail_msg: "Ford MCP requires OCI Vault secret references and the existing emme-2 private address."
+
+- name: Confirm the provisioned MCP environment can be updated safely
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/mcp/.env"
+  register: mcp_runtime_env_file
+
+- name: Require the existing MCP environment file
+  ansible.builtin.assert:
+    that: [mcp_runtime_env_file.stat.exists]
+    fail_msg: "The existing MCP environment file is missing; deployment will not create a new runtime on an unprovisioned VM."
+
+- name: Read the existing MCP image setting without exposing the environment file
+  ansible.builtin.slurp:
+    src: "{{ remote_root }}/mcp/.env"
+  register: mcp_runtime_env_raw
+  no_log: true
+
+- name: Preserve the current MCP image on rollback
+  ansible.builtin.set_fact:
+    mcp_runtime_existing_image: "{{ (mcp_runtime_env_raw.content | b64decode).splitlines() | select('match', '^MCP_IMAGE=') | first | default('MCP_IMAGE=', true) | regex_replace('^MCP_IMAGE=', '') }}"
+  no_log: true
+
+- name: Install OCI CLI for MCP Instance Principal secret reads
+  ansible.builtin.import_role:
+    name: backup
+    tasks_from: install-oci-cli.yml
+  become: true
+
+- name: Read MCP runtime credentials from OCI Vault without exposing values
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/oci
+      - secrets
+      - secret-bundle
+      - get
+      - --auth
+      - instance_principal
+      - --secret-id
+      - "{{ item.ocid }}"
+      - --query
+      - 'data."secret-bundle-content".content'
+      - --raw-output
+  loop:
+    - name: postgres-password
+      ocid: "{{ mcp_postgres_password_secret_ocid }}"
+    - name: mcp-http-bearer-token
+      ocid: "{{ mcp_http_bearer_token_secret_ocid }}"
+  register: mcp_runtime_secret_bundles
+  changed_when: false
+  no_log: true
+
+- name: Set MCP runtime secret facts
+  ansible.builtin.set_fact:
+    mcp_postgres_password: "{{ mcp_runtime_secret_bundles.results[0].stdout | trim | b64decode }}"
+    mcp_http_bearer_token: "{{ mcp_runtime_secret_bundles.results[1].stdout | trim | b64decode }}"
+  no_log: true
+
+- name: Render the MCP environment from the verified Vault values
+  ansible.builtin.template:
+    src: mcp-runtime.env.j2
+    dest: "{{ remote_root }}/mcp/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  no_log: true

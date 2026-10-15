@@ -3,6 +3,10 @@
   hosts: data
   become: true
   tasks:
+    - name: Configure MCP runtime secrets from OCI Vault
+      ansible.builtin.import_role:
+        name: mcp
+        tasks_from: configure-runtime.yml
     - name: Run Ford MCP blue-green deployment tasks
       ansible.builtin.import_role:
         name: mcp

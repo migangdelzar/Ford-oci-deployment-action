@@ -80,6 +80,40 @@
     cmd: docker network inspect app_default
   changed_when: false
 
+- name: Require the configured Collector Compose file
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/app/compose.yml"
+  register: app_collector_compose_file
+
+- name: Confirm the Collector deployment is provisioned
+  ansible.builtin.assert:
+    that: [app_collector_compose_file.stat.exists]
+    fail_msg: "The Collector Compose file is missing; Ford Service blue-green deployment will not proceed."
+
+- name: Restart the Collector with current Vault-backed credentials
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name app
+      --env-file "{{ remote_root }}/app/.env"
+      -f "{{ remote_root }}/app/compose.yml"
+      up -d --force-recreate otel-collector
+  changed_when: true
+
+- name: List active Collector services
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name app
+      --env-file "{{ remote_root }}/app/.env"
+      -f "{{ remote_root }}/app/compose.yml"
+      ps --services --filter status=running
+  register: app_collector_services
+  changed_when: false
+
+- name: Confirm the Collector is running before the Service candidate starts
+  ansible.builtin.assert:
+    that: ["'otel-collector' in app_collector_services.stdout_lines"]
+    fail_msg: "The OpenTelemetry Collector did not start with its verified configuration."
+
 - name: Render blue-green Ford Service Compose file
   ansible.builtin.template:
     src: blue-green-compose.yml.j2

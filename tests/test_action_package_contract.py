@@ -30,6 +30,9 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_MCP_PRIVATE_IP": "10.0.0.2",
                 "OCI_DATA_PRIVATE_IP": "10.0.0.3",
                 "OCI_ACTION_VALIDATE_ONLY": "true",
+                "OCI_SECRETS_PROVIDER": "oci-vault",
+                "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
             }
         )
         environment.update(overrides)
@@ -89,6 +92,8 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('"langfuse_public_key": os.environ["OCI_LANGFUSE_PUBLIC_KEY"]', script)
         self.assertIn('"langfuse_secret_key_secret_ocid": os.environ["OCI_LANGFUSE_SECRET_KEY_SECRET_OCID"]', script)
         self.assertIn('"service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"]', script)
+        self.assertIn("secrets-provider:", action)
+        self.assertIn("FORD_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}", action)
         for env_name in (
             "OCI_GRAFANA_CLOUD_OTLP_ENDPOINT",
             "OCI_GRAFANA_CLOUD_INSTANCE_ID",
@@ -102,7 +107,7 @@ class ActionPackageContractTest(unittest.TestCase):
                 self.assertIn(f"{env_name}:", action)
 
     def test_service_collector_secrets_are_read_on_host_without_logging_values(self):
-        tasks = (ROOT / "deployment/ansible/roles/app/tasks/main.yml").read_text(
+        tasks = (ROOT / "deployment/ansible/roles/app/tasks/configure-observability.yml").read_text(
             encoding="utf-8"
         )
         template = (
@@ -116,6 +121,64 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("GRAFANA_CLOUD_API_TOKEN={{ grafana_cloud_api_token }}", template)
         self.assertIn("LANGFUSE_SECRET_KEY={{ langfuse_secret_key }}", template)
         self.assertNotIn("lookup('ansible.builtin.env', 'GRAFANA_CLOUD_API_TOKEN')", template)
+
+    def test_mcp_deploy_requires_oci_vault_runtime_secrets(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-mcp",
+            OCI_SECRETS_PROVIDER="",
+            OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID="",
+            OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ford-mcp requires OCI Vault runtime secret references", result.stderr)
+
+        valid = self.validate_action(OCI_TARGET="ford-mcp")
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_mcp_vault_secret_references_reach_the_remote_role_without_values(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("postgres-password-secret-ocid:", action)
+        self.assertIn("mcp-http-bearer-token-secret-ocid:", action)
+        self.assertIn('"mcp_postgres_password_secret_ocid": os.environ["OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID"]', script)
+        self.assertIn('"mcp_http_bearer_token_secret_ocid": os.environ["OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID"]', script)
+
+    def test_blue_green_playbooks_prepare_runtime_configuration_before_rollout(self):
+        app = (ROOT / "deployment/ansible/app-blue-green.yml").read_text(
+            encoding="utf-8"
+        )
+        mcp = (ROOT / "deployment/ansible/mcp-blue-green.yml").read_text(
+            encoding="utf-8"
+        )
+        app_configure = app.index("tasks_from: configure-observability.yml")
+        app_rollout = app.index("tasks_from: blue-green.yml")
+        mcp_configure = mcp.index("tasks_from: configure-runtime.yml")
+        mcp_rollout = mcp.index("tasks_from: blue-green.yml")
+
+        self.assertLess(app_configure, app_rollout)
+        self.assertLess(mcp_configure, mcp_rollout)
+
+    def test_runtime_secret_reads_use_instance_principal_and_hide_values(self):
+        app = (
+            ROOT / "deployment/ansible/roles/app/tasks/configure-observability.yml"
+        ).read_text(encoding="utf-8")
+        mcp = (
+            ROOT / "deployment/ansible/roles/mcp/tasks/configure-runtime.yml"
+        ).read_text(encoding="utf-8")
+
+        for source in (app, mcp):
+            with self.subTest(source=source[:24]):
+                self.assertIn("instance_principal", source)
+                self.assertIn("no_log: true", source)
+                self.assertIn("secret-bundle", source)
+
+        self.assertIn("src: app.env.j2", app)
+        self.assertIn("src: collector.env.j2", app)
+        self.assertIn("src: mcp-runtime.env.j2", mcp)
 
     def test_action_rejects_mutable_images(self):
         result = self.validate_action(OCI_IMAGE="ghcr.io/example/ford-service:latest")
@@ -172,6 +235,8 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("deployment/ansible/mcp-blue-green.yml --list-tasks", source)
         self.assertIn("Validate blue-green Ford Service inputs", source)
         self.assertIn("Validate blue-green MCP deployment inputs", source)
+        self.assertIn("Read observability credentials from OCI Vault", source)
+        self.assertIn("Read MCP runtime credentials from OCI Vault", source)
 
     def test_app_environment_defaults_operator_username_for_action_deployments(self):
         template = (
@@ -234,6 +299,9 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_REMOTE_ROOT": "/opt/ford",
                 "OCI_MCP_PRIVATE_IP": "10.0.0.2",
                 "OCI_ACTION_VALIDATE_ONLY": "true",
+                "OCI_SECRETS_PROVIDER": "oci-vault",
+                "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
             }
         )
         missing = subprocess.run(
@@ -284,7 +352,7 @@ class ActionPackageContractTest(unittest.TestCase):
 
     def test_mcp_role_accepts_the_immutable_digest_used_by_release_workflows(self):
         source = (
-            ROOT / "deployment/ansible/roles/mcp/tasks/main.yml"
+            ROOT / "deployment/ansible/roles/mcp/tasks/blue-green.yml"
         ).read_text(encoding="utf-8")
 
         self.assertIn(
