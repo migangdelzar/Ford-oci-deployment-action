@@ -63,6 +63,17 @@ if [[ "${OCI_ACTION_VALIDATE_ONLY:-false}" == "true" ]]; then
   exit 0
 fi
 
+if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  [[ -n "$OCI_GRAFANA_CLOUD_OTLP_ENDPOINT" ]] || fail "ford-service requires the Grafana Cloud OTLP endpoint"
+  [[ -n "$OCI_GRAFANA_CLOUD_INSTANCE_ID" ]] || fail "ford-service requires the Grafana Cloud instance ID"
+  [[ "$OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID" =~ ^ocid1\.vaultsecret\. ]] || fail "ford-service requires the Grafana Cloud API token Vault secret OCID"
+  [[ -n "$OCI_LANGFUSE_OTLP_ENDPOINT" ]] || fail "ford-service requires the Langfuse OTLP endpoint"
+  [[ -n "$OCI_LANGFUSE_PUBLIC_KEY" ]] || fail "ford-service requires the Langfuse public key"
+  [[ "$OCI_LANGFUSE_SECRET_KEY_SECRET_OCID" =~ ^ocid1\.vaultsecret\. ]] || fail "ford-service requires the Langfuse secret key Vault secret OCID"
+  [[ -f "$OCI_SERVICE_SOURCE_ROOT/deployment/observability/otel-collector/grafana-cloud-config.yaml" ]] \
+    || fail "ford-service requires the checked-out Collector configuration"
+fi
+
 ACTION_ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPOSITORY_ROOT="$(cd "$ACTION_ROOT/../../.." && pwd)"
 TEMP_ROOT="$(mktemp -d)"
@@ -119,6 +130,15 @@ extra_vars = {
 }
 if target == "ford-service":
     extra_vars["app_operation"] = operation
+    extra_vars.update({
+        "service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"],
+        "grafana_cloud_otlp_endpoint": os.environ["OCI_GRAFANA_CLOUD_OTLP_ENDPOINT"],
+        "grafana_cloud_instance_id": os.environ["OCI_GRAFANA_CLOUD_INSTANCE_ID"],
+        "grafana_cloud_api_token_secret_ocid": os.environ["OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID"],
+        "langfuse_otlp_endpoint": os.environ["OCI_LANGFUSE_OTLP_ENDPOINT"],
+        "langfuse_public_key": os.environ["OCI_LANGFUSE_PUBLIC_KEY"],
+        "langfuse_secret_key_secret_ocid": os.environ["OCI_LANGFUSE_SECRET_KEY_SECRET_OCID"],
+    })
     if os.environ["OCI_IMAGE"]:
         extra_vars["app_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/app-blue-green.yml"

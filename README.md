@@ -2,13 +2,16 @@
 
 Composite GitHub Action for deploying or rolling back the Ford Service and
 Ford MCP containers on their existing OCI VMs. It packages the Ansible
-playbooks it runs, so callers do not need a checkout of a private repository.
+playbooks it runs.
 
 Callers must use a reviewed, full 40-character commit SHA and run this action
 inside their own protected production environment. Give the job only
 `packages: read` permission for its short-lived GHCR pull token. Keep app,
 database, model-provider, Meta, and observability credentials on the target
-runtime; they are not action inputs.
+runtime; secret values are not action inputs. The Service caller passes
+observability endpoints, public identifiers, and Vault secret OCIDs. The action
+reads Grafana and Langfuse credentials directly from OCI Vault on emme-1 using
+the VM's Instance Principal.
 
 ```yaml
 permissions:
@@ -39,6 +42,16 @@ SSH key by default. Ford Service must pass `data-private-ip` for the existing
 emme-2 address so Ansible can render PostgreSQL and Redis endpoints; the MCP
 target continues to use `mcp-private-ip`. `operation: rollback` restores only the previously
 recorded immutable image; it does not revert database migrations.
+
+Ford Service callers must check out the Service `main` branch in the deployment
+job because the Collector configuration is stored there. Configure production
+environment variables for `GRAFANA_CLOUD_OTLP_ENDPOINT`,
+`GRAFANA_CLOUD_INSTANCE_ID`, `LANGFUSE_OTLP_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`,
+`FORD_VAULT_SECRET_OCID_GRAFANA_CLOUD_API_TOKEN`, and
+`FORD_VAULT_SECRET_OCID_LANGFUSE_SECRET_KEY`. The emme-1 Instance Principal
+must have `read secret-bundles` access to those two Vault secrets. Secret values
+are fetched on the VM and written only to the mode-0600 Collector environment
+file; Ansible suppresses their command and task output.
 
 ## Local checks
 

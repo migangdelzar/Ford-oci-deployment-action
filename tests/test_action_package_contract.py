@@ -76,6 +76,47 @@ class ActionPackageContractTest(unittest.TestCase):
             action,
         )
 
+    def test_service_deploy_passes_observability_settings_and_vault_secret_ids(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"grafana_cloud_otlp_endpoint": os.environ["OCI_GRAFANA_CLOUD_OTLP_ENDPOINT"]', script)
+        self.assertIn('"grafana_cloud_instance_id": os.environ["OCI_GRAFANA_CLOUD_INSTANCE_ID"]', script)
+        self.assertIn('"grafana_cloud_api_token_secret_ocid": os.environ["OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID"]', script)
+        self.assertIn('"langfuse_otlp_endpoint": os.environ["OCI_LANGFUSE_OTLP_ENDPOINT"]', script)
+        self.assertIn('"langfuse_public_key": os.environ["OCI_LANGFUSE_PUBLIC_KEY"]', script)
+        self.assertIn('"langfuse_secret_key_secret_ocid": os.environ["OCI_LANGFUSE_SECRET_KEY_SECRET_OCID"]', script)
+        self.assertIn('"service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"]', script)
+        for env_name in (
+            "OCI_GRAFANA_CLOUD_OTLP_ENDPOINT",
+            "OCI_GRAFANA_CLOUD_INSTANCE_ID",
+            "OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID",
+            "OCI_LANGFUSE_OTLP_ENDPOINT",
+            "OCI_LANGFUSE_PUBLIC_KEY",
+            "OCI_LANGFUSE_SECRET_KEY_SECRET_OCID",
+            "OCI_SERVICE_SOURCE_ROOT",
+        ):
+            with self.subTest(env_name=env_name):
+                self.assertIn(f"{env_name}:", action)
+
+    def test_service_collector_secrets_are_read_on_host_without_logging_values(self):
+        tasks = (ROOT / "deployment/ansible/roles/app/tasks/main.yml").read_text(
+            encoding="utf-8"
+        )
+        template = (
+            ROOT / "deployment/ansible/roles/app/templates/collector.env.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("--auth\n      - instance_principal", tasks)
+        self.assertIn("no_log: true", tasks)
+        self.assertIn("grafana_cloud_api_token: \"{{ observability_secret_bundles.results[0].stdout", tasks)
+        self.assertIn("langfuse_secret_key: \"{{ observability_secret_bundles.results[1].stdout", tasks)
+        self.assertIn("GRAFANA_CLOUD_API_TOKEN={{ grafana_cloud_api_token }}", template)
+        self.assertIn("LANGFUSE_SECRET_KEY={{ langfuse_secret_key }}", template)
+        self.assertNotIn("lookup('ansible.builtin.env', 'GRAFANA_CLOUD_API_TOKEN')", template)
+
     def test_action_rejects_mutable_images(self):
         result = self.validate_action(OCI_IMAGE="ghcr.io/example/ford-service:latest")
 
