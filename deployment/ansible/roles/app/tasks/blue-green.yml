@@ -93,9 +93,14 @@
     app_previous_slot: "{{ app_current_slot if app_current_slot in ['blue', 'green'] else ('green' if app_current_slot == 'legacy' else '') }}"
     app_previous_image: "{{ app_release_state.active_image if app_release_state_file.stat.exists else (app_current_image if app_current_image | length > 0 else (app_image if app_image is defined else '')) }}"
 
+- name: Resolve app blue-green slot ports
+  ansible.builtin.set_fact:
+    app_blue_port_resolved: "{{ app_blue_port | default(18081) | int }}"
+    app_green_port_resolved: "{{ app_green_port | default(18082) | int }}"
+
 - name: Select candidate Ford Service port
   ansible.builtin.set_fact:
-    app_candidate_port: "{{ (app_blue_port | default(18081) | int) if app_candidate_slot == 'blue' else (app_green_port | default(18082) | int) }}"
+    app_candidate_port: "{{ app_blue_port_resolved if app_candidate_slot == 'blue' else app_green_port_resolved }}"
 
 - name: Validate selected Ford Service candidate identity
   ansible.builtin.assert:
@@ -152,11 +157,9 @@
     mode: "0640"
   vars:
     app_image: "{{ app_candidate_image }}"
-    app_previous_image: "{{ app_previous_image if app_previous_image | length > 0 else app_candidate_image }}"
-    app_candidate_slot: "{{ app_candidate_slot }}"
-    app_proxy_image: "{{ app_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}"
-    app_blue_port: "{{ app_blue_port | default(18081) }}"
-    app_green_port: "{{ app_green_port | default(18082) }}"
+    app_compose_previous_image: "{{ app_previous_image if app_previous_image | length > 0 else app_candidate_image }}"
+    app_blue_port: "{{ app_blue_port_resolved }}"
+    app_green_port: "{{ app_green_port_resolved }}"
 
 - name: Render candidate Ford Service proxy route
   ansible.builtin.template:
@@ -261,7 +264,7 @@
 
 - name: Wait for retained Ford Service rollback slot health
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ (app_blue_port | default(18081) | int) if app_previous_slot == 'blue' else (app_green_port | default(18082) | int) }}/actuator/health"
+    url: "http://127.0.0.1:{{ app_blue_port_resolved if app_previous_slot == 'blue' else app_green_port_resolved }}/actuator/health"
     status_code: 200
     return_content: true
     timeout: 10

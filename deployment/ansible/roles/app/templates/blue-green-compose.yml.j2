@@ -1,6 +1,6 @@
 services:
   ford-service-blue:
-    image: {{ app_image if app_candidate_slot == 'blue' else app_previous_image }}
+    image: {{ app_image if app_candidate_slot == 'blue' else app_compose_previous_image }}
     container_name: ford-service-blue
     restart: unless-stopped
     env_file: [.env]
@@ -9,7 +9,7 @@ services:
     networks: [app_default]
 
   ford-service-green:
-    image: {{ app_image if app_candidate_slot == 'green' else app_previous_image }}
+    image: {{ app_image if app_candidate_slot == 'green' else app_compose_previous_image }}
     container_name: ford-service-green
     restart: unless-stopped
     env_file: [.env]
@@ -18,7 +18,7 @@ services:
     networks: [app_default]
 
   app-proxy:
-    image: {{ app_proxy_image }}
+    image: {{ app_proxy_image | default('nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de') }}
     container_name: ford-service-proxy
     restart: unless-stopped
     network_mode: host
