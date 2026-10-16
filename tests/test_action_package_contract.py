@@ -173,8 +173,9 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('regex_search(', smoke)
         self.assertIn('"isError"', smoke)
         self.assertIn('is not none', smoke)
-        self.assertIn('"modelPageUrl"', smoke)
-        self.assertIn(r'www\\.forduruapan\\.mx', smoke)
+        self.assertIn("modelPageUrl", smoke)
+        self.assertIn("'modelPageUrl' not in mcp_public_search.content", smoke)
+        self.assertIn("'https://www.forduruapan.mx/' not in mcp_public_search.content", smoke)
         self.assertNotIn("'isError' in mcp_public_search.content", smoke)
 
     def test_service_operator_login_email_is_passed_to_ansible(self):
