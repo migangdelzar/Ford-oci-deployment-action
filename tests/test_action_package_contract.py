@@ -37,6 +37,11 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_SERVICE_MCP_ENABLED": "true",
+                "OCI_SERVICE_MCP_URL": "https://ford-mcp.emme.business",
+                "OCI_SERVICE_MCP_ACCESS_CLIENT_ID": "mcp-access-id.example",
+                "OCI_SERVICE_MCP_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
             }
         )
         environment.update(overrides)
@@ -77,6 +82,63 @@ class ActionPackageContractTest(unittest.TestCase):
         malformed = self.validate_action(OCI_OPERATOR_USERNAME="operator")
         self.assertNotEqual(malformed.returncode, 0)
         self.assertIn("ford-service requires a valid operator login email", malformed.stderr)
+
+    def test_service_deploy_requires_complete_mcp_runtime_configuration(self):
+        invalid_inputs = (
+            ("OCI_SERVICE_MCP_ENABLED", ""),
+            ("OCI_SERVICE_MCP_ENABLED", "false"),
+            ("OCI_SERVICE_MCP_URL", "https://your-stable-mcp-domain.example.com"),
+            ("OCI_SERVICE_MCP_ACCESS_CLIENT_ID", ""),
+            ("OCI_SERVICE_MCP_TOKEN_SECRET_OCID", ""),
+            ("OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID", ""),
+        )
+        for name, value in invalid_inputs:
+            with self.subTest(name=name, value=value):
+                result = self.validate_action(**{name: value})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Ford Service requires complete MCP runtime configuration", result.stderr)
+
+        valid = self.validate_action()
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_service_mcp_runtime_settings_and_vault_references_reach_app_environment(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+        template = (
+            ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
+        ).read_text(encoding="utf-8")
+
+        for input_name in (
+            "service-mcp-enabled:",
+            "service-mcp-url:",
+            "service-mcp-access-client-id:",
+            "service-mcp-token-secret-ocid:",
+            "service-mcp-access-client-secret-secret-ocid:",
+        ):
+            with self.subTest(input_name=input_name):
+                self.assertIn(input_name, action)
+
+        for environment_name in (
+            "OCI_SERVICE_MCP_ENABLED",
+            "OCI_SERVICE_MCP_URL",
+            "OCI_SERVICE_MCP_ACCESS_CLIENT_ID",
+            "OCI_SERVICE_MCP_TOKEN_SECRET_OCID",
+            "OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID",
+        ):
+            with self.subTest(environment_name=environment_name):
+                self.assertIn(f"{environment_name}:", action)
+                self.assertIn(f'os.environ["{environment_name}"]', script)
+
+        self.assertIn('"ford_mcp_enabled": os.environ["OCI_SERVICE_MCP_ENABLED"] == "true"', script)
+        self.assertIn('"ford_mcp_url": os.environ["OCI_SERVICE_MCP_URL"]', script)
+        self.assertIn('"ford_mcp_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"]', script)
+        self.assertIn("FORD_MCP_ENABLED={{ (ford_mcp_enabled | bool) | ternary('true', 'false') }}", template)
+        self.assertIn("FORD_MCP_URL={{ ford_mcp_url }}", template)
+        self.assertIn("FORD_MCP_ACCESS_CLIENT_ID={{ ford_mcp_access_client_id }}", template)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN={{ ford_mcp_token_secret_ocid }}", template)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET={{ ford_mcp_access_client_secret_secret_ocid }}", template)
 
     def test_service_operator_login_email_is_passed_to_ansible(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")

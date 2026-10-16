@@ -63,6 +63,22 @@ inputs:
   operator-username:
     description: Email address for the Ford Service password-login operator.
     required: false
+  service-mcp-enabled:
+    description: Enable the production Ford MCP connection for Ford Service.
+    required: false
+    default: "true"
+  service-mcp-url:
+    description: HTTPS origin for the production Ford MCP service.
+    required: false
+  service-mcp-access-client-id:
+    description: Cloudflare Access service-token client ID for Ford MCP.
+    required: false
+  service-mcp-token-secret-ocid:
+    description: OCI Vault secret OCID for the Ford MCP bearer token.
+    required: false
+  service-mcp-access-client-secret-secret-ocid:
+    description: OCI Vault secret OCID for the Cloudflare Access client secret.
+    required: false
   ui-upstream-url:
     description: Cloudflare Pages origin proxied by Ford Service for browser UI routes and assets.
     required: false
@@ -112,6 +128,11 @@ runs:
         OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
         OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}
+        OCI_SERVICE_MCP_ENABLED: ${{ inputs['service-mcp-enabled'] }}
+        OCI_SERVICE_MCP_URL: ${{ inputs['service-mcp-url'] }}
+        OCI_SERVICE_MCP_ACCESS_CLIENT_ID: ${{ inputs['service-mcp-access-client-id'] }}
+        OCI_SERVICE_MCP_TOKEN_SECRET_OCID: ${{ inputs['service-mcp-token-secret-ocid'] }}
+        OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID: ${{ inputs['service-mcp-access-client-secret-secret-ocid'] }}
         FORD_WEB_UI_UPSTREAM_URL: ${{ inputs['ui-upstream-url'] }}
         OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
         OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
