@@ -122,4 +122,5 @@
       no_log: true
       failed_when: >-
         mcp_public_search.status != 200 or
-        (mcp_public_search.content | regex_search('"isError"\\s*:\\s*true')) is not none
+        (mcp_public_search.content | regex_search('"isError"\\s*:\\s*true')) is not none or
+        (mcp_public_search.content | regex_search('"modelPageUrl"\\s*:\\s*"https://www\\.forduruapan\\.mx/[^\"]+"')) is none
