@@ -14,6 +14,14 @@ reads Grafana and Langfuse credentials directly from OCI Vault on emme-1 using
 the VM's Instance Principal. It also requires the existing Service operator
 login email as the non-secret `operator-username` input; the action validates
 it and passes it to the runtime template instead of inventing a username.
+The Service caller must also pass the production MCP settings through
+`service-mcp-enabled`, `service-mcp-url`, and `service-mcp-access-client-id`,
+plus the MCP bearer-token and Cloudflare Access client-secret Vault OCIDs.
+MCP is required for volatile vehicle facts, so the action rejects Service
+rollouts with disabled MCP, a non-production MCP host, a missing Access client
+ID, or either missing Vault reference. The values rendered to the Service
+environment are the Vault references; secret values remain in OCI Vault and
+are resolved by the Service's OCI Vault property loader.
 For Ford Service, pass the `ui-upstream-url` input to select the Cloudflare
 Pages origin. It defaults to `https://emme-crm-ui.pages.dev`; production callers
 can set it from the `FORD_WEB_UI_UPSTREAM_URL` environment variable to preserve
@@ -66,6 +74,12 @@ environment variables for `GRAFANA_CLOUD_OTLP_ENDPOINT`,
 must have `read secret-bundles` access to those two Vault secrets. Secret values
 are fetched on the VM and written only to the mode-0600 Collector environment
 file; Ansible suppresses their command and task output.
+Also configure `FORD_MCP_ENABLED=true`,
+`FORD_MCP_URL=https://ford-mcp.emme.business`, `FORD_MCP_ACCESS_CLIENT_ID`,
+`FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN`, and
+`FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET` in the protected Service
+production environment. The emme-1 Instance Principal needs `read secret-bundles`
+access to both MCP Vault secrets.
 
 ## Local checks
 

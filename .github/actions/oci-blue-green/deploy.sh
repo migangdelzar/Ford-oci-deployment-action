@@ -50,6 +50,12 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
     || fail "ford-service requires a valid existing data VM private IPv4 address"
   [[ "${OCI_OPERATOR_USERNAME:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
     || fail "ford-service requires a valid operator login email"
+  [[ "${OCI_SERVICE_MCP_ENABLED:-}" == "true" \
+    && "${OCI_SERVICE_MCP_URL:-}" == "https://ford-mcp.emme.business" \
+    && "${OCI_SERVICE_MCP_ACCESS_CLIENT_ID:-}" =~ ^[A-Za-z0-9._-]+$ \
+    && "${OCI_SERVICE_MCP_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
+    && "${OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+    || fail "Ford Service requires complete MCP runtime configuration"
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   if [[ "$OCI_TARGET" == "ford-service" ]]; then
@@ -140,6 +146,11 @@ if target == "ford-service":
     extra_vars.update({
         "service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"],
         "ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"],
+        "ford_mcp_enabled": os.environ["OCI_SERVICE_MCP_ENABLED"] == "true",
+        "ford_mcp_url": os.environ["OCI_SERVICE_MCP_URL"],
+        "ford_mcp_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"],
+        "ford_mcp_token_secret_ocid": os.environ["OCI_SERVICE_MCP_TOKEN_SECRET_OCID"],
+        "ford_mcp_access_client_secret_secret_ocid": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID"],
         "grafana_cloud_otlp_endpoint": os.environ["OCI_GRAFANA_CLOUD_OTLP_ENDPOINT"],
         "grafana_cloud_instance_id": os.environ["OCI_GRAFANA_CLOUD_INSTANCE_ID"],
         "grafana_cloud_api_token_secret_ocid": os.environ["OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID"],
