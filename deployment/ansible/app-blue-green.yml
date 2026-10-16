@@ -3,14 +3,65 @@
   hosts: app
   become: false
   tasks:
-    - name: Configure Ford Service Vault-backed runtime and Collector files
-      ansible.builtin.import_role:
-        name: app
-        tasks_from: configure-observability.yml
-    - name: Run Ford Service blue-green deployment tasks
-      ansible.builtin.import_role:
-        name: app
-        tasks_from: blue-green.yml
+    - name: Check the current Ford Service environment exists before snapshotting
+      ansible.builtin.stat:
+        path: "{{ remote_root }}/app/.env"
+      register: ford_service_env_file
+
+    - name: Require the current Ford Service environment before rollout
+      ansible.builtin.assert:
+        that:
+          - ford_service_env_file.stat.exists
+          - ford_service_env_file.stat.isreg
+        fail_msg: "The provisioned Ford Service environment file is required before a blue-green rollout."
+
+    - name: Snapshot the current Ford Service environment
+      ansible.builtin.tempfile:
+        state: file
+        path: "{{ remote_root }}/app"
+        prefix: .env-before-release-
+      register: ford_service_env_snapshot
+      no_log: true
+
+    - name: Copy the current Ford Service environment to its protected snapshot
+      ansible.builtin.copy:
+        src: "{{ remote_root }}/app/.env"
+        dest: "{{ ford_service_env_snapshot.path }}"
+        remote_src: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Configure runtime and deploy Ford Service transactionally
+      block:
+        - name: Configure Ford Service Vault-backed runtime and Collector files
+          ansible.builtin.import_role:
+            name: app
+            tasks_from: configure-observability.yml
+        - name: Run Ford Service blue-green deployment tasks
+          ansible.builtin.import_role:
+            name: app
+            tasks_from: blue-green.yml
+      rescue:
+        - name: Restore Ford Service environment after failed rollout
+          ansible.builtin.copy:
+            src: "{{ ford_service_env_snapshot.path }}"
+            dest: "{{ remote_root }}/app/.env"
+            remote_src: true
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0600"
+          no_log: true
+        - name: Fail after restoring Ford Service environment
+          ansible.builtin.fail:
+            msg: "Ford Service deployment failed; the prior runtime environment was restored. Review the redacted task results for the failure."
+      always:
+        - name: Remove the protected Ford Service environment snapshot
+          ansible.builtin.file:
+            path: "{{ ford_service_env_snapshot.path }}"
+            state: absent
+          no_log: true
   post_tasks:
     - name: Fetch redacted Ford Service release metadata for the deployment summary
       ansible.builtin.fetch:

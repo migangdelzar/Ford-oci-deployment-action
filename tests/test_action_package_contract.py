@@ -864,6 +864,99 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("Restore the prior scheduler image in Compose", source)
         self.assertIn("Stop the scheduler when no prior MCP release existed", source)
 
+    def test_service_meta_reply_configuration_reaches_candidate_environment(self):
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        tasks = (ROOT / "deployment/ansible/app-blue-green.yml").read_text(encoding="utf-8")
+        template = (ROOT / "deployment/ansible/roles/app/templates/app.env.j2").read_text(encoding="utf-8")
+
+        for name in (
+            "meta-delivery-enabled:",
+            "outbox-enabled:",
+            "meta-whatsapp-delivery-endpoint:",
+            "meta-phone-number-id:",
+            "meta-app-secret-ocid:",
+            "meta-verify-token-ocid:",
+            "meta-whatsapp-access-token-secret-ocid:",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, action)
+
+        for name in (
+            "OCI_META_DELIVERY_ENABLED",
+            "OCI_OUTBOX_ENABLED",
+            "OCI_META_WHATSAPP_DELIVERY_ENDPOINT",
+            "OCI_META_PHONE_NUMBER_ID",
+            "OCI_META_APP_SECRET_OCID",
+            "OCI_META_VERIFY_TOKEN_OCID",
+            "OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(f"{name}:", action)
+                self.assertIn(f'os.environ.get("{name}"', script)
+
+        self.assertIn('"ford_meta_delivery_enabled": os.environ.get("OCI_META_DELIVERY_ENABLED", "false") == "true"', script)
+        self.assertIn('"ford_outbox_enabled": os.environ.get("OCI_OUTBOX_ENABLED", "false") == "true"', script)
+        self.assertIn('"ford_meta_whatsapp_delivery_endpoint": os.environ.get("OCI_META_WHATSAPP_DELIVERY_ENDPOINT", "")', script)
+        self.assertIn('"ford_meta_provider_account_id": os.environ.get("OCI_META_PHONE_NUMBER_ID", "")', script)
+        self.assertIn("ford_meta_delivery_enabled", script)
+        self.assertIn("ford_outbox_enabled", script)
+        self.assertIn("no_log: true", tasks)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_META_APP_SECRET={{ ford_meta_app_secret_ocid", template)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_META_VERIFY_TOKEN={{ ford_meta_verify_token_ocid", template)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_META_WHATSAPP_ACCESS_TOKEN={{ ford_meta_whatsapp_access_token_secret_ocid", template)
+
+    def test_service_proxy_preserves_the_public_https_scheme_for_spring(self):
+        proxy = (
+            ROOT / "deployment/ansible/roles/app/templates/proxy.conf.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("proxy_set_header X-Forwarded-Proto https;", proxy)
+        self.assertNotIn("proxy_set_header X-Forwarded-Proto $scheme;", proxy)
+
+    def test_service_runtime_environment_is_restored_when_blue_green_rollout_fails(self):
+        playbook = (ROOT / "deployment/ansible/app-blue-green.yml").read_text(
+            encoding="utf-8"
+        )
+
+        snapshot = playbook.index("Snapshot the current Ford Service environment")
+        render = playbook.index("tasks_from: configure-observability.yml")
+        rescue = playbook.index("Restore Ford Service environment after failed rollout")
+        rollout = playbook.index("tasks_from: blue-green.yml")
+
+        self.assertLess(snapshot, render)
+        self.assertLess(render, rollout)
+        self.assertGreater(rescue, rollout)
+        self.assertIn("no_log: true", playbook[playbook.index("block:"):])
+        self.assertIn("Fail after restoring Ford Service environment", playbook)
+
+    def test_enabled_whatsapp_delivery_requires_a_matching_official_endpoint_and_vault_secrets(self):
+        base = {
+            "OCI_META_DELIVERY_ENABLED": "true",
+            "OCI_OUTBOX_ENABLED": "true",
+            "OCI_META_WHATSAPP_DELIVERY_ENDPOINT": "https://graph.facebook.com/v26.0/123456789/messages",
+            "OCI_META_PHONE_NUMBER_ID": "123456789",
+            "OCI_META_APP_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+            "OCI_META_VERIFY_TOKEN_OCID": "ocid1.vaultsecret.oc1.example",
+            "OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+        }
+        self.assertEqual(self.validate_action(**base).returncode, 0)
+
+        invalid = (
+            ("OCI_META_WHATSAPP_DELIVERY_ENDPOINT", "https://evil.example/v26.0/123456789/messages"),
+            ("OCI_META_WHATSAPP_DELIVERY_ENDPOINT", "https://graph.facebook.com/v26.0/987654321/messages"),
+            ("OCI_META_PHONE_NUMBER_ID", "not-numeric"),
+            ("OCI_META_APP_SECRET_OCID", ""),
+            ("OCI_META_VERIFY_TOKEN_OCID", ""),
+            ("OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID", ""),
+            ("OCI_OUTBOX_ENABLED", "false"),
+        )
+        for name, value in invalid:
+            with self.subTest(name=name, value=value):
+                result = self.validate_action(**(base | {name: value}))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("123456789", result.stderr)
+
     def test_blue_green_includes_a_private_monthly_scheduler_service(self):
         source = (
             ROOT
