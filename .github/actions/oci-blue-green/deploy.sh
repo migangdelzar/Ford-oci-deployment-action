@@ -61,6 +61,26 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
     && "${OCI_SERVICE_MCP_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
     && "${OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
     || fail "Ford Service requires complete MCP runtime configuration"
+  meta_delivery_enabled="${OCI_META_DELIVERY_ENABLED:-false}"
+  outbox_enabled="${OCI_OUTBOX_ENABLED:-false}"
+  [[ "$meta_delivery_enabled" == "true" || "$meta_delivery_enabled" == "false" ]] \
+    || fail "Ford Service Meta delivery flag must be true or false"
+  [[ "$outbox_enabled" == "true" || "$outbox_enabled" == "false" ]] \
+    || fail "Ford Service outbox flag must be true or false"
+  if [[ "$meta_delivery_enabled" == "true" ]]; then
+    [[ "$outbox_enabled" == "true" ]] \
+      || fail "WhatsApp delivery requires the Ford Service outbox to be enabled"
+    [[ "${OCI_META_PHONE_NUMBER_ID:-}" =~ ^[0-9]+$ ]] \
+      || fail "WhatsApp delivery requires a numeric phone number ID"
+    [[ "${OCI_META_WHATSAPP_DELIVERY_ENDPOINT:-}" =~ ^https://graph\.facebook\.com/v[0-9]+(\.[0-9]+)?/([0-9]+)/messages$ ]] \
+      || fail "WhatsApp delivery requires an official Graph API messages endpoint"
+    [[ "${BASH_REMATCH[2]}" == "$OCI_META_PHONE_NUMBER_ID" ]] \
+      || fail "WhatsApp endpoint phone number ID must match the configured phone number ID"
+    [[ "${OCI_META_APP_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
+      && "${OCI_META_VERIFY_TOKEN_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
+      && "${OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+      || fail "WhatsApp delivery requires the Meta app, verify, and access-token Vault references"
+  fi
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   if [[ "$OCI_TARGET" == "ford-service" ]]; then
@@ -156,6 +176,13 @@ if target == "ford-service":
         "ford_mcp_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"],
         "ford_mcp_token_secret_ocid": os.environ["OCI_SERVICE_MCP_TOKEN_SECRET_OCID"],
         "ford_mcp_access_client_secret_secret_ocid": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID"],
+        "ford_meta_delivery_enabled": os.environ.get("OCI_META_DELIVERY_ENABLED", "false") == "true",
+        "ford_outbox_enabled": os.environ.get("OCI_OUTBOX_ENABLED", "false") == "true",
+        "ford_meta_whatsapp_delivery_endpoint": os.environ.get("OCI_META_WHATSAPP_DELIVERY_ENDPOINT", ""),
+        "ford_meta_provider_account_id": os.environ.get("OCI_META_PHONE_NUMBER_ID", ""),
+        "ford_meta_app_secret_ocid": os.environ.get("OCI_META_APP_SECRET_OCID", ""),
+        "ford_meta_verify_token_ocid": os.environ.get("OCI_META_VERIFY_TOKEN_OCID", ""),
+        "ford_meta_whatsapp_access_token_secret_ocid": os.environ.get("OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID", ""),
         "grafana_cloud_otlp_endpoint": os.environ["OCI_GRAFANA_CLOUD_OTLP_ENDPOINT"],
         "grafana_cloud_instance_id": os.environ["OCI_GRAFANA_CLOUD_INSTANCE_ID"],
         "grafana_cloud_api_token_secret_ocid": os.environ["OCI_GRAFANA_CLOUD_API_TOKEN_SECRET_OCID"],

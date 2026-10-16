@@ -69,6 +69,29 @@ inputs:
   operator-username:
     description: Email address for the Ford Service password-login operator.
     required: false
+  meta-delivery-enabled:
+    description: Enable Meta outbound delivery for Ford Service.
+    required: false
+    default: "false"
+  outbox-enabled:
+    description: Enable durable outbound event processing for Ford Service.
+    required: false
+    default: "false"
+  meta-whatsapp-delivery-endpoint:
+    description: Official Graph API messages endpoint for the configured WhatsApp phone number.
+    required: false
+  meta-phone-number-id:
+    description: WhatsApp phone number ID used by the app binding.
+    required: false
+  meta-app-secret-ocid:
+    description: OCI Vault secret OCID for the Meta app secret.
+    required: false
+  meta-verify-token-ocid:
+    description: OCI Vault secret OCID for the Meta webhook verification token.
+    required: false
+  meta-whatsapp-access-token-secret-ocid:
+    description: OCI Vault secret OCID for the WhatsApp delivery access token.
+    required: false
   service-mcp-enabled:
     description: Enable the production Ford MCP connection for Ford Service.
     required: false
@@ -136,6 +159,13 @@ runs:
         OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID: ${{ inputs['mcp-public-smoke-access-client-secret-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
         OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}
+        OCI_META_DELIVERY_ENABLED: ${{ inputs['meta-delivery-enabled'] }}
+        OCI_OUTBOX_ENABLED: ${{ inputs['outbox-enabled'] }}
+        OCI_META_WHATSAPP_DELIVERY_ENDPOINT: ${{ inputs['meta-whatsapp-delivery-endpoint'] }}
+        OCI_META_PHONE_NUMBER_ID: ${{ inputs['meta-phone-number-id'] }}
+        OCI_META_APP_SECRET_OCID: ${{ inputs['meta-app-secret-ocid'] }}
+        OCI_META_VERIFY_TOKEN_OCID: ${{ inputs['meta-verify-token-ocid'] }}
+        OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID: ${{ inputs['meta-whatsapp-access-token-secret-ocid'] }}
         OCI_SERVICE_MCP_ENABLED: ${{ inputs['service-mcp-enabled'] }}
         OCI_SERVICE_MCP_URL: ${{ inputs['service-mcp-url'] }}
         OCI_SERVICE_MCP_ACCESS_CLIENT_ID: ${{ inputs['service-mcp-access-client-id'] }}
