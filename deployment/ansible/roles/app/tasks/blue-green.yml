@@ -163,6 +163,14 @@
     app_blue_port: "{{ app_blue_port_resolved }}"
     app_green_port: "{{ app_green_port_resolved }}"
 
+- name: Create Nginx config directory for stable route
+  ansible.builtin.file:
+    path: "{{ remote_root }}/app/nginx"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+
 - name: Render candidate Ford Service proxy route
   ansible.builtin.template:
     src: proxy.conf.j2
@@ -323,19 +331,25 @@
   failed_when: false
 
 - name: Preserve the current Ford Service proxy route
+  ansible.builtin.command:
+    cmd: docker exec ford-service-proxy cat /etc/nginx/conf.d/default.conf
+  register: app_previous_proxy_route
+  changed_when: false
+  when: app_proxy_inspect.rc == 0
+
+- name: Save the currently loaded Ford Service proxy route for rollback
   ansible.builtin.copy:
-    src: "{{ remote_root }}/app/proxy.conf"
     dest: "{{ remote_root }}/app/proxy.conf.previous"
-    remote_src: true
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: "0640"
+    content: "{{ app_previous_proxy_route.stdout }}\n"
   when: app_proxy_inspect.rc == 0
 
 - name: Install the candidate Ford Service proxy route
   ansible.builtin.copy:
     src: "{{ remote_root }}/app/proxy.conf.next"
-    dest: "{{ remote_root }}/app/proxy.conf"
+    dest: "{{ remote_root }}/app/nginx/default.conf"
     remote_src: true
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
@@ -425,7 +439,7 @@
         - name: Restore previous Ford Service proxy configuration when present
           ansible.builtin.copy:
             src: "{{ remote_root }}/app/proxy.conf.previous"
-            dest: "{{ remote_root }}/app/proxy.conf"
+            dest: "{{ remote_root }}/app/nginx/default.conf"
             remote_src: true
             owner: "{{ ansible_user }}"
             group: "{{ ansible_user }}"
@@ -433,6 +447,26 @@
           when:
             - app_proxy_inspect.rc == 0
             - app_current_slot in ['blue', 'green']
+
+        - name: Start the stable proxy with the restored Ford Service route
+          ansible.builtin.command:
+            cmd: >-
+              docker compose --project-name ford-service
+              --env-file "{{ remote_root }}/app/.env"
+              -f "{{ remote_root }}/app/blue-green-compose.yml"
+              up -d app-proxy
+          when:
+            - app_proxy_inspect.rc == 0
+            - app_current_slot in ['blue', 'green']
+          changed_when: true
+
+        - name: Validate the restored Ford Service proxy configuration
+          ansible.builtin.command:
+            cmd: docker exec ford-service-proxy nginx -t
+          when:
+            - app_proxy_inspect.rc == 0
+            - app_current_slot in ['blue', 'green']
+          changed_when: false
 
         - name: Reload previous Ford Service proxy route
           ansible.builtin.command:

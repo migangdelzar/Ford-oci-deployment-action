@@ -23,7 +23,8 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ./proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      # Directory mount keeps atomic route-file replacements visible to Nginx.
+      - ./nginx:/etc/nginx/conf.d:ro
 
 networks:
   app_default:
