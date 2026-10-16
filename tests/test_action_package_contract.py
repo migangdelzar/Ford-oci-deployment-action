@@ -37,6 +37,8 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID": "mcp-access-id.example",
+                "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_SERVICE_MCP_ENABLED": "true",
                 "OCI_SERVICE_MCP_URL": "https://ford-mcp.emme.business",
                 "OCI_SERVICE_MCP_ACCESS_CLIENT_ID": "mcp-access-id.example",
@@ -140,6 +142,35 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN={{ ford_mcp_token_secret_ocid }}", template)
         self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET={{ ford_mcp_access_client_secret_secret_ocid }}", template)
 
+    def test_public_mcp_smoke_uses_vault_credentials_and_rolls_back_failed_mcp_cutovers(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
+            encoding="utf-8"
+        )
+        smoke = (ROOT / "deployment/ansible/mcp-public-smoke.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for input_name in (
+            "mcp-public-smoke-access-client-id:",
+            "mcp-public-smoke-access-client-secret-secret-ocid:",
+        ):
+            with self.subTest(input_name=input_name):
+                self.assertIn(input_name, action)
+
+        self.assertIn("OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID:", action)
+        self.assertIn("OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID:", action)
+        self.assertIn('"mcp_public_smoke_access_client_id": os.environ["OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID"]', script)
+        self.assertIn('"mcp_public_smoke_access_client_secret_secret_ocid": os.environ["OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID"]', script)
+        self.assertIn('"mcp_public_smoke_token_secret_ocid": os.environ["OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID"]', script)
+        self.assertIn("deployment/ansible/mcp-public-smoke.yml", script)
+        self.assertIn("mcp_operation\"] = \"rollback\"", script)
+        self.assertIn("hosts: all", smoke)
+        self.assertIn("instance_principal", smoke)
+        self.assertIn("no_log: true", smoke)
+        self.assertIn("method: tools/call", smoke)
+        self.assertIn("name: search_vehicles", smoke)
+
     def test_service_operator_login_email_is_passed_to_ansible(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
@@ -238,6 +269,16 @@ class ActionPackageContractTest(unittest.TestCase):
 
         valid = self.validate_action(OCI_TARGET="ford-mcp")
         self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_mcp_deploy_requires_vault_credentials_for_public_smoke(self):
+        missing = self.validate_action(
+            OCI_TARGET="ford-mcp",
+            OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID="",
+            OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID="",
+        )
+
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("ford-mcp deploy requires OCI Vault credentials for the public endpoint smoke check", missing.stderr)
 
     def test_mcp_vault_secret_references_reach_the_remote_role_without_values(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
@@ -690,6 +731,8 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID": "mcp-access-id.example",
+                "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
             }
         )
         missing = subprocess.run(

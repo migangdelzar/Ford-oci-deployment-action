@@ -1,16 +1,52 @@
 ---
 - name: Verify the public Ford MCP endpoint
-  hosts: app
+  hosts: all
   gather_facts: false
   tasks:
-    - name: Initialize MCP through Cloudflare
+    - name: Validate the public smoke-check inputs
+      ansible.builtin.assert:
+        that:
+          - mcp_public_smoke_url == 'https://ford-mcp.emme.business/mcp'
+          - mcp_public_smoke_access_client_id is match('^[A-Za-z0-9._-]+$')
+          - mcp_public_smoke_access_client_secret_secret_ocid is match('^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$')
+          - mcp_public_smoke_token_secret_ocid is match('^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$')
+        fail_msg: "Public MCP smoke-check configuration is incomplete."
+
+    - name: Read public MCP authentication secrets from OCI Vault
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/oci
+          - secrets
+          - secret-bundle
+          - get
+          - --auth
+          - instance_principal
+          - --secret-id
+          - "{{ item }}"
+          - --query
+          - 'data."secret-bundle-content".content'
+          - --raw-output
+      loop:
+        - "{{ mcp_public_smoke_token_secret_ocid }}"
+        - "{{ mcp_public_smoke_access_client_secret_secret_ocid }}"
+      register: mcp_public_smoke_secret_bundles
+      changed_when: false
+      no_log: true
+
+    - name: Decode public MCP authentication secrets
+      ansible.builtin.set_fact:
+        mcp_public_smoke_bearer_token: "{{ mcp_public_smoke_secret_bundles.results[0].stdout | trim | b64decode }}"
+        mcp_public_smoke_access_client_secret: "{{ mcp_public_smoke_secret_bundles.results[1].stdout | trim | b64decode }}"
+      no_log: true
+
+    - name: Initialize MCP through the public Cloudflare route
       ansible.builtin.uri:
-        url: https://ford-mcp.emme.business/mcp
+        url: "{{ mcp_public_smoke_url }}"
         method: POST
         headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
-          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
-          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Authorization: "Bearer {{ mcp_public_smoke_bearer_token }}"
+          CF-Access-Client-Id: "{{ mcp_public_smoke_access_client_id }}"
+          CF-Access-Client-Secret: "{{ mcp_public_smoke_access_client_secret }}"
           Host: ford-mcp.emme.business
           Accept: application/json, text/event-stream
         body_format: json
@@ -32,12 +68,12 @@
 
     - name: Verify public MCP tools/list
       ansible.builtin.uri:
-        url: https://ford-mcp.emme.business/mcp
+        url: "{{ mcp_public_smoke_url }}"
         method: POST
         headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
-          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
-          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Authorization: "Bearer {{ mcp_public_smoke_bearer_token }}"
+          CF-Access-Client-Id: "{{ mcp_public_smoke_access_client_id }}"
+          CF-Access-Client-Secret: "{{ mcp_public_smoke_access_client_secret }}"
           Host: ford-mcp.emme.business
           Accept: application/json, text/event-stream
         body_format: json
@@ -58,14 +94,14 @@
         'compare_trims' not in mcp_public_tools.content or
         'search_offers' not in mcp_public_tools.content
 
-    - name: Verify a semantic vehicle search through the public MCP
+    - name: Verify semantic vehicle search through the public MCP route
       ansible.builtin.uri:
-        url: https://ford-mcp.emme.business/mcp
+        url: "{{ mcp_public_smoke_url }}"
         method: POST
         headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.env', 'FORD_MCP_TOKEN') | default(lookup('ansible.builtin.env', 'FORD_MCP_API_TOKEN') | default(lookup('ansible.builtin.env', 'MCP_HTTP_BEARER_TOKEN') | default('', true), true), true) }}"
-          CF-Access-Client-Id: "{{ ford_mcp_access_client_id }}"
-          CF-Access-Client-Secret: "{{ ford_mcp_access_client_secret }}"
+          Authorization: "Bearer {{ mcp_public_smoke_bearer_token }}"
+          CF-Access-Client-Id: "{{ mcp_public_smoke_access_client_id }}"
+          CF-Access-Client-Secret: "{{ mcp_public_smoke_access_client_secret }}"
           Host: ford-mcp.emme.business
           Accept: application/json, text/event-stream
         body_format: json

@@ -57,6 +57,12 @@ inputs:
   mcp-http-bearer-token-secret-ocid:
     description: OCI Vault secret OCID for the MCP HTTP bearer token.
     required: false
+  mcp-public-smoke-access-client-id:
+    description: Cloudflare Access service-token client ID used by the public MCP smoke check.
+    required: false
+  mcp-public-smoke-access-client-secret-secret-ocid:
+    description: OCI Vault secret OCID for the Cloudflare Access client secret used by the MCP smoke check.
+    required: false
   data-private-ip:
     description: Existing data VM private IP used by the Ford Service for PostgreSQL and Redis.
     required: false
@@ -126,6 +132,8 @@ runs:
         FORD_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}
         OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID: ${{ inputs['postgres-password-secret-ocid'] }}
         OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
+        OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID: ${{ inputs['mcp-public-smoke-access-client-id'] }}
+        OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID: ${{ inputs['mcp-public-smoke-access-client-secret-secret-ocid'] }}
         OCI_DATA_PRIVATE_IP: ${{ inputs['data-private-ip'] }}
         OCI_OPERATOR_USERNAME: ${{ inputs['operator-username'] }}
         OCI_SERVICE_MCP_ENABLED: ${{ inputs['service-mcp-enabled'] }}

@@ -43,6 +43,11 @@ if [[ "$OCI_TARGET" == "ford-mcp" ]]; then
   [[ "${OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
     && "${OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
     || fail "ford-mcp requires OCI Vault runtime secret references"
+  if [[ "$OCI_OPERATION" == "deploy" ]]; then
+    [[ "${OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID:-}" =~ ^[A-Za-z0-9._-]+$ \
+      && "${OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+      || fail "ford-mcp deploy requires OCI Vault credentials for the public endpoint smoke check"
+  fi
 elif [[ "$OCI_TARGET" == "ford-service" ]]; then
   [[ "$OCI_DATA_PRIVATE_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
     || fail "ford-service requires the existing data VM private IPv4 address"
@@ -157,6 +162,10 @@ if target == "ford-service":
         "langfuse_otlp_endpoint": os.environ["OCI_LANGFUSE_OTLP_ENDPOINT"],
         "langfuse_public_key": os.environ["OCI_LANGFUSE_PUBLIC_KEY"],
         "langfuse_secret_key_secret_ocid": os.environ["OCI_LANGFUSE_SECRET_KEY_SECRET_OCID"],
+        "mcp_public_smoke_url": "https://ford-mcp.emme.business/mcp",
+        "mcp_public_smoke_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"],
+        "mcp_public_smoke_access_client_secret_secret_ocid": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID"],
+        "mcp_public_smoke_token_secret_ocid": os.environ["OCI_SERVICE_MCP_TOKEN_SECRET_OCID"],
     })
     if os.environ["OCI_IMAGE"]:
         extra_vars["app_image"] = os.environ["OCI_IMAGE"]
@@ -167,6 +176,10 @@ else:
         "mcp_secrets_provider": os.environ["OCI_SECRETS_PROVIDER"],
         "mcp_postgres_password_secret_ocid": os.environ["OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID"],
         "mcp_http_bearer_token_secret_ocid": os.environ["OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID"],
+        "mcp_public_smoke_url": "https://ford-mcp.emme.business/mcp",
+        "mcp_public_smoke_access_client_id": os.environ["OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID"],
+        "mcp_public_smoke_access_client_secret_secret_ocid": os.environ["OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID"],
+        "mcp_public_smoke_token_secret_ocid": os.environ["OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID"],
     })
     if os.environ["OCI_IMAGE"]:
         extra_vars["mcp_image"] = os.environ["OCI_IMAGE"]
@@ -217,6 +230,51 @@ if ! "$TEMP_ROOT/venv/bin/ansible-playbook" \
     printf '%s\n' '- Result: failed; inspect the redacted Ansible rollback result above.'
   } >> "$GITHUB_STEP_SUMMARY"
   exit 1
+fi
+
+if [[ "$OCI_OPERATION" == "deploy" ]]; then
+  if ! "$TEMP_ROOT/venv/bin/ansible-playbook" \
+    -i "$TEMP_ROOT/inventory.json" \
+    --private-key "$TEMP_ROOT/ssh/deploy_key" \
+    --extra-vars "@$TEMP_ROOT/extra-vars.json" \
+    deployment/ansible/mcp-public-smoke.yml; then
+    rollback_result=not-applicable
+    if [[ "$OCI_TARGET" == "ford-mcp" ]]; then
+      rollback_vars="$TEMP_ROOT/mcp-rollback-vars.json"
+      python3 - "$TEMP_ROOT/extra-vars.json" "$rollback_vars" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    values = json.load(source)
+values["mcp_operation"] = "rollback"
+values.pop("mcp_image", None)
+with open(sys.argv[2], "w", encoding="utf-8") as destination:
+    json.dump(values, destination)
+PY
+      if "$TEMP_ROOT/venv/bin/ansible-playbook" \
+        -i "$TEMP_ROOT/inventory.json" \
+        --private-key "$TEMP_ROOT/ssh/deploy_key" \
+        --extra-vars "@$rollback_vars" \
+        deployment/ansible/mcp-blue-green.yml; then
+        rollback_result=passed
+      else
+        rollback_result=failed
+      fi
+    fi
+    {
+      printf '%s\n' '## OCI deployment result'
+      printf '%s\n' "- Target: $OCI_TARGET"
+      printf '%s\n' "- Operation: $OCI_OPERATION"
+      printf '%s\n' "- Source SHA: $OCI_SOURCE_SHA"
+      printf '%s\n' '- Result: public MCP smoke check failed.'
+      printf '%s\n' "- MCP route rollback: $rollback_result"
+      if [[ "$OCI_TARGET" == "ford-service" ]]; then
+        printf '%s\n' '- Ford Service slot remains deployed; its blue-green health checks passed.'
+      fi
+    } >> "$GITHUB_STEP_SUMMARY"
+    exit 1
+  fi
 fi
 
 python3 - "$RUNNER_TEMP/oci-release-state.json" "$OCI_TARGET" "$OCI_OPERATION" "$OCI_IMAGE" "$OCI_SOURCE_SHA" "$GITHUB_STEP_SUMMARY" <<'PY'
