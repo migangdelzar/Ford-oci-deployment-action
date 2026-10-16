@@ -74,6 +74,11 @@ environment variables for `GRAFANA_CLOUD_OTLP_ENDPOINT`,
 must have `read secret-bundles` access to those two Vault secrets. Secret values
 are fetched on the VM and written only to the mode-0600 Collector environment
 file; Ansible suppresses their command and task output.
+
+The Service proxy mounts its Nginx `conf.d` directory instead of a single
+configuration file. This lets Ansible atomically replace the active route file
+and have Nginx see it before the graceful reload; single-file bind mounts can
+remain attached to the old file after an atomic replacement.
 Also configure `FORD_MCP_ENABLED=true`,
 `FORD_MCP_URL=https://ford-mcp.emme.business`, `FORD_MCP_ACCESS_CLIENT_ID`,
 `FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN`, and

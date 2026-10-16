@@ -913,6 +913,31 @@ class ActionPackageContractTest(unittest.TestCase):
 
         self.assertIn("proxy_set_header X-Forwarded-Proto https;", proxy)
         self.assertNotIn("proxy_set_header X-Forwarded-Proto $scheme;", proxy)
+        self.assertIn('proxy_set_header Forwarded "";', proxy)
+        self.assertIn("proxy_set_header X-Forwarded-Host $host;", proxy)
+        self.assertIn("proxy_set_header X-Forwarded-Port 443;", proxy)
+
+    def test_service_proxy_route_uses_a_directory_mount_for_atomic_updates(self):
+        compose = (
+            ROOT / "deployment/ansible/roles/app/templates/blue-green-compose.yml.j2"
+        ).read_text(encoding="utf-8")
+        tasks = (
+            ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("./nginx:/etc/nginx/conf.d:ro", compose)
+        self.assertIn("Create Nginx config directory for stable route", tasks)
+        self.assertIn('path: "{{ remote_root }}/app/nginx"', tasks)
+        self.assertIn('dest: "{{ remote_root }}/app/nginx/default.conf"', tasks)
+        self.assertIn("docker exec ford-service-proxy cat /etc/nginx/conf.d/default.conf", tasks)
+        self.assertIn('src: "{{ remote_root }}/app/proxy.conf.previous"', tasks)
+        install = tasks.index("Install the candidate Ford Service proxy route")
+        start_proxy = tasks.index("Start the stable Ford Service proxy")
+        validate = tasks.index("Validate stable Ford Service proxy configuration")
+        reload_proxy = tasks.index("Reload stable Ford Service proxy")
+        self.assertLess(install, validate)
+        self.assertLess(start_proxy, validate)
+        self.assertLess(validate, reload_proxy)
 
     def test_service_runtime_environment_is_restored_when_blue_green_rollout_fails(self):
         playbook = (ROOT / "deployment/ansible/app-blue-green.yml").read_text(
