@@ -142,6 +142,20 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN={{ ford_mcp_token_secret_ocid }}", template)
         self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET={{ ford_mcp_access_client_secret_secret_ocid }}", template)
 
+    def test_service_defaults_to_deepseek_cloud_without_local_or_secondary_providers(self):
+        template = (
+            ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("FORD_AI_CHAT_PROVIDER={{ ford_ai_chat_provider | default('openai') }}", template)
+        self.assertIn("FORD_AI_CLOUD_PROVIDER={{ ford_ai_cloud_provider | default('openai') }}", template)
+        self.assertIn("FORD_AI_CLOUD_ENABLED={{ (ford_ai_cloud_enabled | default(true))", template)
+        self.assertIn("FORD_AI_LOCAL_ENABLED={{ (ford_ai_local_enabled | default(false))", template)
+        self.assertIn("FORD_AI_CLOUD_BASE_URL={{ ford_ai_cloud_base_url | default('https://api.deepseek.com') }}", template)
+        self.assertIn("FORD_AI_CLOUD_MODEL_VERSION={{ ford_ai_cloud_model_version | default('deepseek-flash') }}", template)
+        self.assertIn("FORD_AI_PROVIDER_MAX_ATTEMPTS={{ ford_ai_provider_max_attempts | default(1) }}", template)
+        self.assertIn("FORD_AI_FALLBACK_ORDER={{ ford_ai_fallback_order | default('') }}", template)
+
     def test_public_mcp_smoke_uses_vault_credentials_and_rolls_back_failed_mcp_cutovers(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
