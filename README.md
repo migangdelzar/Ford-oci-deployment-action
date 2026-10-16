@@ -81,6 +81,20 @@ Also configure `FORD_MCP_ENABLED=true`,
 production environment. The emme-1 Instance Principal needs `read secret-bundles`
 access to both MCP Vault secrets.
 
+Every deploy runs a read-only smoke against `https://ford-mcp.emme.business/mcp`
+from the target VM after the blue-green route switch. It initializes the
+Streamable HTTP protocol, checks the production tool list, and performs a small
+`search_vehicles` call. The bearer token and Cloudflare Access client secret
+are read from OCI Vault on that VM; the action never accepts their values, and
+Ansible hides all secret reads and authenticated HTTP responses. The Service
+deploy reuses its MCP Vault references. An MCP deploy also needs
+`mcp-public-smoke-access-client-id` and
+`mcp-public-smoke-access-client-secret-secret-ocid`, and emme-2's Instance
+Principal needs `read secret-bundles` access to the Access secret as well as the
+existing MCP bearer-token secret. If an MCP deployment's public smoke fails,
+the action runs the existing MCP blue-green rollback and fails the release;
+the Service image is left deployed if only its dependency smoke fails.
+
 ## Local checks
 
 ```bash
