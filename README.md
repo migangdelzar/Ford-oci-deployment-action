@@ -83,7 +83,7 @@ access to both MCP Vault secrets.
 
 Every deploy runs a read-only smoke against `https://ford-mcp.emme.business/mcp`
 from the target VM after the blue-green route switch. It initializes the
-Streamable HTTP session, checks the production tool list, and performs a small
+Streamable HTTP protocol, checks the production tool list, and performs a small
 `search_vehicles` call. The bearer token and Cloudflare Access client secret
 are read from OCI Vault on that VM; the action never accepts their values, and
 Ansible hides all secret reads and authenticated HTTP responses. The Service

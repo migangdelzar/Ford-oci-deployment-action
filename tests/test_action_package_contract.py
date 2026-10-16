@@ -170,6 +170,10 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("no_log: true", smoke)
         self.assertIn("method: tools/call", smoke)
         self.assertIn("name: search_vehicles", smoke)
+        self.assertIn('regex_search(', smoke)
+        self.assertIn('"isError"', smoke)
+        self.assertIn('is not none', smoke)
+        self.assertNotIn("'isError' in mcp_public_search.content", smoke)
 
     def test_service_operator_login_email_is_passed_to_ansible(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")

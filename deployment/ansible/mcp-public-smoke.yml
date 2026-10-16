@@ -122,4 +122,4 @@
       no_log: true
       failed_when: >-
         mcp_public_search.status != 200 or
-        'isError' in mcp_public_search.content
+        (mcp_public_search.content | regex_search('"isError"\\s*:\\s*true')) is not none
