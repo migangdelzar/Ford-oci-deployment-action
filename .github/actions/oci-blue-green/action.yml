@@ -1,8 +1,8 @@
 name: OCI blue-green deploy
-description: Deploy or roll back Ford Service or MCP on its existing OCI VM.
+description: Deploy or roll back Ford Service, MCP, or scraper scheduler on its existing OCI VM.
 inputs:
   target:
-    description: Deployment target (ford-service or ford-mcp).
+    description: Deployment target (ford-service, ford-mcp, or ford-scraper-scheduler).
     required: true
   image:
     description: Immutable GHCR digest for deploy. Rollback resolves the recorded prior image.
@@ -130,6 +130,19 @@ inputs:
   langfuse-secret-key-secret-ocid:
     description: OCI Vault secret OCID for the Langfuse secret key.
     required: false
+  service-catalog-tools-enabled:
+    description: Enable Ford Service local read-only catalog tools; keep disabled until reviewed.
+    required: false
+    default: "false"
+  service-catalog-jdbc-url:
+    description: Dedicated read-only catalog JDBC URL for Ford Service.
+    required: false
+  service-catalog-username:
+    description: Least-privilege Ford catalog reader username.
+    required: false
+  service-catalog-password-secret-ocid:
+    description: OCI Vault secret OCID for the catalog reader password.
+    required: false
 runs:
   using: composite
   steps:
@@ -178,5 +191,9 @@ runs:
         OCI_LANGFUSE_OTLP_ENDPOINT: ${{ inputs['langfuse-otlp-endpoint'] }}
         OCI_LANGFUSE_PUBLIC_KEY: ${{ inputs['langfuse-public-key'] }}
         OCI_LANGFUSE_SECRET_KEY_SECRET_OCID: ${{ inputs['langfuse-secret-key-secret-ocid'] }}
+        OCI_SERVICE_CATALOG_TOOLS_ENABLED: ${{ inputs['service-catalog-tools-enabled'] }}
+        OCI_SERVICE_CATALOG_JDBC_URL: ${{ inputs['service-catalog-jdbc-url'] }}
+        OCI_SERVICE_CATALOG_USERNAME: ${{ inputs['service-catalog-username'] }}
+        FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD: ${{ inputs['service-catalog-password-secret-ocid'] }}
         OCI_SERVICE_SOURCE_ROOT: ${{ github.workspace }}
       run: ${{ github.action_path }}/deploy.sh

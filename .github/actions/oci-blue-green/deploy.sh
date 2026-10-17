@@ -6,8 +6,8 @@ fail() {
   exit 2
 }
 
-[[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-mcp" ]] \
-  || fail "target must be ford-service or ford-mcp"
+[[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-mcp" || "$OCI_TARGET" == "ford-scraper-scheduler" ]] \
+  || fail "target must be ford-service, ford-mcp, or ford-scraper-scheduler"
 [[ "$OCI_OPERATION" == "deploy" || "$OCI_OPERATION" == "rollback" ]] \
   || fail "operation must be deploy or rollback"
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
@@ -81,9 +81,12 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
       && "${OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
       || fail "WhatsApp delivery requires the Meta app, verify, and access-token Vault references"
   fi
+elif [[ "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
+  [[ "${OCI_SECRETS_PROVIDER:-}" == "oci-vault" ]] \
+    || fail "ford-scraper-scheduler requires OCI Vault runtime secret references"
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
-  if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
     [[ -n "${OCI_BACKUP_HOST:-}" && "$OCI_BACKUP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
       || fail "ford-service deploy requires the existing data VM backup host"
     [[ -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]] \
@@ -152,7 +155,7 @@ else:
     host_vars["emme_2_private_ip"] = os.environ["OCI_DATA_PRIVATE_IP"]
 
 inventory = {"all": {"children": {group: {"hosts": {"release-target": host_vars}}}}}
-if target in ("ford-service", "ford-mcp") and operation == "deploy":
+if target in ("ford-service", "ford-mcp", "ford-scraper-scheduler") and operation == "deploy":
     backup_host_vars = {
         "ansible_host": os.environ["OCI_BACKUP_HOST"],
         "ansible_user": os.environ.get("OCI_BACKUP_USER") or os.environ["OCI_DEPLOY_USER"],
@@ -197,7 +200,7 @@ if target == "ford-service":
     if os.environ["OCI_IMAGE"]:
         extra_vars["app_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/app-blue-green.yml"
-else:
+elif target == "ford-mcp":
     extra_vars.update({
         "mcp_operation": operation,
         "mcp_secrets_provider": os.environ["OCI_SECRETS_PROVIDER"],
@@ -211,6 +214,11 @@ else:
     if os.environ["OCI_IMAGE"]:
         extra_vars["mcp_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/mcp-blue-green.yml"
+else:
+    extra_vars["scheduler_operation"] = operation
+    if os.environ["OCI_IMAGE"]:
+        extra_vars["scheduler_image"] = os.environ["OCI_IMAGE"]
+    playbook = "deployment/ansible/scraper-scheduler-blue-green.yml"
 
 for path, value in ((sys.argv[1], inventory), (sys.argv[2], backup_inventory), (sys.argv[3], extra_vars)):
     with open(path, "w", encoding="utf-8") as file:
@@ -296,7 +304,7 @@ PY
       printf '%s\n' "- Source SHA: $OCI_SOURCE_SHA"
       printf '%s\n' '- Result: public MCP smoke check failed.'
       printf '%s\n' "- MCP route rollback: $rollback_result"
-      if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
         printf '%s\n' '- Ford Service slot remains deployed; its blue-green health checks passed.'
       fi
     } >> "$GITHUB_STEP_SUMMARY"

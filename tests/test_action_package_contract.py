@@ -61,6 +61,41 @@ class ActionPackageContractTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_scraper_scheduler_target_passes_validation_without_mcp_listener_settings(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-scraper-scheduler",
+            OCI_MCP_PRIVATE_IP="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_scheduler_target_requires_backup_and_uses_scheduler_playbook(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-scraper-scheduler",
+            OCI_BACKUP_HOST="",
+            OCI_BACKUP_SSH_PRIVATE_KEY="",
+            OCI_MCP_PRIVATE_IP="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ford-scraper-scheduler deploy requires the existing data VM backup host", result.stderr)
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('playbook = "deployment/ansible/scraper-scheduler-blue-green.yml"', script)
+        self.assertIn('extra_vars["scheduler_image"]', script)
+
+    def test_scheduler_release_is_backup_gated_and_rolls_back_to_one_active_container(self):
+        role = (ROOT / "deployment/ansible/roles/scraper_scheduler/tasks/release.yml").read_text(encoding="utf-8")
+        compose = (ROOT / "deployment/ansible/roles/scraper_scheduler/templates/compose.yml.j2").read_text(encoding="utf-8")
+        playbook = (ROOT / "deployment/ansible/scraper-scheduler-blue-green.yml").read_text(encoding="utf-8")
+        deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertLess(deploy.index("deployment/ansible/backup-now.yml"), deploy.index('"$PLAYBOOK"'))
+        self.assertLess(role.index("Migrate the catalog"), role.index("Replace the single active scheduler"))
+        self.assertIn("Restore the previous scheduler image", role)
+        self.assertIn('command: ["node", "dist/src/cli.js", "scheduler"]', compose)
+        self.assertNotIn("ports:", compose)
+        self.assertIn("hosts: data", playbook)
+
     def test_service_deploy_requires_the_existing_database_private_ip(self):
         missing = self.validate_action(OCI_DATA_PRIVATE_IP="")
         self.assertNotEqual(missing.returncode, 0)
@@ -376,6 +411,7 @@ class ActionPackageContractTest(unittest.TestCase):
         for playbook in (
             "app-blue-green.yml",
             "mcp-blue-green.yml",
+            "scraper-scheduler-blue-green.yml",
             "backup-now.yml",
         ):
             with self.subTest(playbook=playbook):

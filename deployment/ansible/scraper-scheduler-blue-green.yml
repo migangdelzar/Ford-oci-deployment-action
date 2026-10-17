@@ -1,0 +1,7 @@
+---
+- name: Release the private Ford scraper scheduler
+  hosts: data
+  become: true
+  roles:
+    - role: scraper_scheduler
+      tasks_from: release.yml
