@@ -6,8 +6,8 @@ fail() {
   exit 2
 }
 
-[[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-mcp" ]] \
-  || fail "target must be ford-service or ford-mcp"
+[[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-mcp" || "$OCI_TARGET" == "ford-scraper-scheduler" ]] \
+  || fail "target must be ford-service, ford-mcp, or ford-scraper-scheduler"
 [[ "$OCI_OPERATION" == "deploy" || "$OCI_OPERATION" == "rollback" ]] \
   || fail "operation must be deploy or rollback"
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
@@ -25,6 +25,15 @@ fi
   || fail "remote-root must be a safe absolute path"
 [[ "$OCI_REGISTRY_USERNAME" =~ ^[A-Za-z0-9._-]+$ ]] || fail "registry-username is required"
 [[ -n "$GHCR_TOKEN" ]] || fail "registry-token is required"
+
+if [[ "$OCI_TARGET" == "ford-service" && "${OCI_SERVICE_CATALOG_TOOLS_ENABLED:-false}" == "true" ]]; then
+  [[ "${OCI_SERVICE_CATALOG_JDBC_URL:-}" =~ ^jdbc:postgresql://[^/]+/[^?]+([?].*)?$ ]] \
+    || fail "enabled catalog tools require a PostgreSQL catalog JDBC URL"
+  [[ "${OCI_SERVICE_CATALOG_USERNAME:-}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+    || fail "enabled catalog tools require a dedicated reader username"
+  [[ "${FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+    || fail "enabled catalog tools require a Vault secret OCID for the reader password"
+fi
 
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   [[ "$OCI_IMAGE" =~ ^ghcr\.io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] \
@@ -55,12 +64,6 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
     || fail "ford-service requires a valid existing data VM private IPv4 address"
   [[ "${OCI_OPERATOR_USERNAME:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
     || fail "ford-service requires a valid operator login email"
-  [[ "${OCI_SERVICE_MCP_ENABLED:-}" == "true" \
-    && "${OCI_SERVICE_MCP_URL:-}" == "https://ford-mcp.emme.business" \
-    && "${OCI_SERVICE_MCP_ACCESS_CLIENT_ID:-}" =~ ^[A-Za-z0-9._-]+$ \
-    && "${OCI_SERVICE_MCP_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ \
-    && "${OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
-    || fail "Ford Service requires complete MCP runtime configuration"
   meta_delivery_enabled="${OCI_META_DELIVERY_ENABLED:-false}"
   outbox_enabled="${OCI_OUTBOX_ENABLED:-false}"
   [[ "$meta_delivery_enabled" == "true" || "$meta_delivery_enabled" == "false" ]] \
@@ -81,11 +84,14 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
       && "${OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
       || fail "WhatsApp delivery requires the Meta app, verify, and access-token Vault references"
   fi
+elif [[ "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
+  [[ "${OCI_SECRETS_PROVIDER:-}" == "oci-vault" ]] \
+    || fail "ford-scraper-scheduler requires OCI Vault runtime secret references"
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
-  if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
     [[ -n "${OCI_BACKUP_HOST:-}" && "$OCI_BACKUP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
-      || fail "ford-service deploy requires the existing data VM backup host"
+      || fail "$OCI_TARGET deploy requires the existing data VM backup host"
     [[ -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]] \
       || fail "backup-ssh-private-key is required for ford-service deploy"
   else
@@ -148,11 +154,11 @@ host_vars = {
 }
 if target == "ford-mcp":
     host_vars["emme_2_private_ip"] = os.environ["OCI_MCP_PRIVATE_IP"]
-else:
+elif target == "ford-service":
     host_vars["emme_2_private_ip"] = os.environ["OCI_DATA_PRIVATE_IP"]
 
 inventory = {"all": {"children": {group: {"hosts": {"release-target": host_vars}}}}}
-if target in ("ford-service", "ford-mcp") and operation == "deploy":
+if target in ("ford-service", "ford-mcp", "ford-scraper-scheduler") and operation == "deploy":
     backup_host_vars = {
         "ansible_host": os.environ["OCI_BACKUP_HOST"],
         "ansible_user": os.environ.get("OCI_BACKUP_USER") or os.environ["OCI_DEPLOY_USER"],
@@ -168,14 +174,13 @@ extra_vars = {
 }
 if target == "ford-service":
     extra_vars["app_operation"] = operation
+    extra_vars["ford_catalog_tools_enabled"] = os.environ.get("OCI_SERVICE_CATALOG_TOOLS_ENABLED", "false")
+    extra_vars["ford_catalog_jdbc_url"] = os.environ.get("OCI_SERVICE_CATALOG_JDBC_URL", "")
+    extra_vars["ford_catalog_username"] = os.environ.get("OCI_SERVICE_CATALOG_USERNAME", "")
+    extra_vars["ford_catalog_password_secret_ocid"] = os.environ.get("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD", "")
     extra_vars.update({
         "service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"],
         "ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"],
-        "ford_mcp_enabled": os.environ["OCI_SERVICE_MCP_ENABLED"] == "true",
-        "ford_mcp_url": os.environ["OCI_SERVICE_MCP_URL"],
-        "ford_mcp_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"],
-        "ford_mcp_token_secret_ocid": os.environ["OCI_SERVICE_MCP_TOKEN_SECRET_OCID"],
-        "ford_mcp_access_client_secret_secret_ocid": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID"],
         "ford_meta_delivery_enabled": os.environ.get("OCI_META_DELIVERY_ENABLED", "false") == "true",
         "ford_outbox_enabled": os.environ.get("OCI_OUTBOX_ENABLED", "false") == "true",
         "ford_meta_whatsapp_delivery_endpoint": os.environ.get("OCI_META_WHATSAPP_DELIVERY_ENDPOINT", ""),
@@ -189,15 +194,11 @@ if target == "ford-service":
         "langfuse_otlp_endpoint": os.environ["OCI_LANGFUSE_OTLP_ENDPOINT"],
         "langfuse_public_key": os.environ["OCI_LANGFUSE_PUBLIC_KEY"],
         "langfuse_secret_key_secret_ocid": os.environ["OCI_LANGFUSE_SECRET_KEY_SECRET_OCID"],
-        "mcp_public_smoke_url": "https://ford-mcp.emme.business/mcp",
-        "mcp_public_smoke_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"],
-        "mcp_public_smoke_access_client_secret_secret_ocid": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID"],
-        "mcp_public_smoke_token_secret_ocid": os.environ["OCI_SERVICE_MCP_TOKEN_SECRET_OCID"],
     })
     if os.environ["OCI_IMAGE"]:
         extra_vars["app_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/app-blue-green.yml"
-else:
+elif target == "ford-mcp":
     extra_vars.update({
         "mcp_operation": operation,
         "mcp_secrets_provider": os.environ["OCI_SECRETS_PROVIDER"],
@@ -211,6 +212,11 @@ else:
     if os.environ["OCI_IMAGE"]:
         extra_vars["mcp_image"] = os.environ["OCI_IMAGE"]
     playbook = "deployment/ansible/mcp-blue-green.yml"
+else:
+    extra_vars["scheduler_operation"] = operation
+    if os.environ["OCI_IMAGE"]:
+        extra_vars["scheduler_image"] = os.environ["OCI_IMAGE"]
+    playbook = "deployment/ansible/scraper-scheduler-blue-green.yml"
 
 for path, value in ((sys.argv[1], inventory), (sys.argv[2], backup_inventory), (sys.argv[3], extra_vars)):
     with open(path, "w", encoding="utf-8") as file:
@@ -296,7 +302,7 @@ PY
       printf '%s\n' "- Source SHA: $OCI_SOURCE_SHA"
       printf '%s\n' '- Result: public MCP smoke check failed.'
       printf '%s\n' "- MCP route rollback: $rollback_result"
-      if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  if [[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
         printf '%s\n' '- Ford Service slot remains deployed; its blue-green health checks passed.'
       fi
     } >> "$GITHUB_STEP_SUMMARY"
@@ -325,6 +331,7 @@ lines = [
     f"- Prior image reference: `{state.get('previous_image') or 'none'}`",
     "- Candidate and stable health checks: passed",
     "- Pre-release database backup: passed" if operation == "deploy" else "- Pre-release database backup: not required for rollback",
+    "- Catalog migration: passed" if target == "ford-scraper-scheduler" and operation == "deploy" else "- Catalog migration: not run",
     "- MCP one-shot migration: passed" if target == "ford-mcp" and operation == "deploy" else "- MCP migration: not run",
     "- Rollback: operator rollback health checks passed" if operation == "rollback" else "- Automatic route restoration: armed for failed post-switch checks",
 ]

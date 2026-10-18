@@ -39,11 +39,6 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID": "mcp-access-id.example",
                 "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
-                "OCI_SERVICE_MCP_ENABLED": "true",
-                "OCI_SERVICE_MCP_URL": "https://ford-mcp.emme.business",
-                "OCI_SERVICE_MCP_ACCESS_CLIENT_ID": "mcp-access-id.example",
-                "OCI_SERVICE_MCP_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
-                "OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
             }
         )
         environment.update(overrides)
@@ -60,6 +55,42 @@ class ActionPackageContractTest(unittest.TestCase):
         result = self.validate_action()
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_scraper_scheduler_target_passes_validation_without_mcp_listener_settings(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-scraper-scheduler",
+            OCI_MCP_PRIVATE_IP="",
+            OCI_DATA_PRIVATE_IP="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_scheduler_target_requires_backup_and_uses_scheduler_playbook(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-scraper-scheduler",
+            OCI_BACKUP_HOST="",
+            OCI_BACKUP_SSH_PRIVATE_KEY="",
+            OCI_MCP_PRIVATE_IP="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ford-scraper-scheduler deploy requires the existing data VM backup host", result.stderr)
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('playbook = "deployment/ansible/scraper-scheduler-blue-green.yml"', script)
+        self.assertIn('extra_vars["scheduler_image"]', script)
+
+    def test_scheduler_release_is_backup_gated_and_rolls_back_to_one_active_container(self):
+        role = (ROOT / "deployment/ansible/roles/scraper_scheduler/tasks/release.yml").read_text(encoding="utf-8")
+        compose = (ROOT / "deployment/ansible/roles/scraper_scheduler/templates/compose.yml.j2").read_text(encoding="utf-8")
+        playbook = (ROOT / "deployment/ansible/scraper-scheduler-blue-green.yml").read_text(encoding="utf-8")
+        deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertLess(deploy.index("deployment/ansible/backup-now.yml"), deploy.index('"$PLAYBOOK"'))
+        self.assertLess(role.index("Migrate the catalog"), role.index("Replace the single active scheduler"))
+        self.assertIn("Restore the previous scheduler image", role)
+        self.assertIn('command: ["node", "dist/src/cli.js", "scheduler"]', compose)
+        self.assertNotIn("ports:", compose)
+        self.assertIn("hosts: data", playbook)
 
     def test_service_deploy_requires_the_existing_database_private_ip(self):
         missing = self.validate_action(OCI_DATA_PRIVATE_IP="")
@@ -84,63 +115,6 @@ class ActionPackageContractTest(unittest.TestCase):
         malformed = self.validate_action(OCI_OPERATOR_USERNAME="operator")
         self.assertNotEqual(malformed.returncode, 0)
         self.assertIn("ford-service requires a valid operator login email", malformed.stderr)
-
-    def test_service_deploy_requires_complete_mcp_runtime_configuration(self):
-        invalid_inputs = (
-            ("OCI_SERVICE_MCP_ENABLED", ""),
-            ("OCI_SERVICE_MCP_ENABLED", "false"),
-            ("OCI_SERVICE_MCP_URL", "https://your-stable-mcp-domain.example.com"),
-            ("OCI_SERVICE_MCP_ACCESS_CLIENT_ID", ""),
-            ("OCI_SERVICE_MCP_TOKEN_SECRET_OCID", ""),
-            ("OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID", ""),
-        )
-        for name, value in invalid_inputs:
-            with self.subTest(name=name, value=value):
-                result = self.validate_action(**{name: value})
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Ford Service requires complete MCP runtime configuration", result.stderr)
-
-        valid = self.validate_action()
-        self.assertEqual(valid.returncode, 0, valid.stderr)
-
-    def test_service_mcp_runtime_settings_and_vault_references_reach_app_environment(self):
-        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(
-            encoding="utf-8"
-        )
-        template = (
-            ROOT / "deployment/ansible/roles/app/templates/app.env.j2"
-        ).read_text(encoding="utf-8")
-
-        for input_name in (
-            "service-mcp-enabled:",
-            "service-mcp-url:",
-            "service-mcp-access-client-id:",
-            "service-mcp-token-secret-ocid:",
-            "service-mcp-access-client-secret-secret-ocid:",
-        ):
-            with self.subTest(input_name=input_name):
-                self.assertIn(input_name, action)
-
-        for environment_name in (
-            "OCI_SERVICE_MCP_ENABLED",
-            "OCI_SERVICE_MCP_URL",
-            "OCI_SERVICE_MCP_ACCESS_CLIENT_ID",
-            "OCI_SERVICE_MCP_TOKEN_SECRET_OCID",
-            "OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID",
-        ):
-            with self.subTest(environment_name=environment_name):
-                self.assertIn(f"{environment_name}:", action)
-                self.assertIn(f'os.environ["{environment_name}"]', script)
-
-        self.assertIn('"ford_mcp_enabled": os.environ["OCI_SERVICE_MCP_ENABLED"] == "true"', script)
-        self.assertIn('"ford_mcp_url": os.environ["OCI_SERVICE_MCP_URL"]', script)
-        self.assertIn('"ford_mcp_access_client_id": os.environ["OCI_SERVICE_MCP_ACCESS_CLIENT_ID"]', script)
-        self.assertIn("FORD_MCP_ENABLED={{ (ford_mcp_enabled | bool) | ternary('true', 'false') }}", template)
-        self.assertIn("FORD_MCP_URL={{ ford_mcp_url }}", template)
-        self.assertIn("FORD_MCP_ACCESS_CLIENT_ID={{ ford_mcp_access_client_id }}", template)
-        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN={{ ford_mcp_token_secret_ocid }}", template)
-        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET={{ ford_mcp_access_client_secret_secret_ocid }}", template)
 
     def test_service_defaults_to_deepseek_cloud_without_local_or_secondary_providers(self):
         template = (
@@ -360,6 +334,44 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertNotIn("BACKUP-PRIVATE-KEY-SHOULD-NOT-LEAK", output)
         self.assertNotIn("REGISTRY-TOKEN-SHOULD-NOT-LEAK", output)
 
+    def test_service_action_exposes_separate_read_only_catalog_runtime_settings(self):
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
+        deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        template = (ROOT / "deployment/ansible/roles/app/templates/app.env.j2").read_text(encoding="utf-8")
+
+        for input_name in (
+            "service-catalog-tools-enabled",
+            "service-catalog-jdbc-url",
+            "service-catalog-username",
+            "service-catalog-password-secret-ocid",
+        ):
+            self.assertIn(input_name, action)
+        for runtime_name in (
+            "FORD_CATALOG_TOOLS_ENABLED",
+            "FORD_CATALOG_JDBC_URL",
+            "FORD_CATALOG_USERNAME",
+            "FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD",
+        ):
+            self.assertIn(runtime_name, deploy + template)
+        self.assertIn("FORD_CATALOG_TOOLS_ENABLED={{ (ford_catalog_tools_enabled | default(false))", template)
+        self.assertIn("FORD_CATALOG_JDBC_URL={{ ford_catalog_jdbc_url | default('') }}", template)
+        self.assertIn("FORD_CATALOG_USERNAME={{ ford_catalog_username | default('') }}", template)
+        self.assertNotIn("FORD_MCP_READ_ONLY_TOOL_NAMES", template)
+        self.assertNotIn("FORD_MCP_", template)
+
+    def test_enabled_catalog_tools_require_reader_url_user_and_vault_reference(self):
+        missing = self.validate_action(OCI_SERVICE_CATALOG_TOOLS_ENABLED="true")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("require a PostgreSQL catalog JDBC URL", missing.stderr)
+
+        configured = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+            OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+            FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD="ocid1.vaultsecret.oc1.phx.example",
+        )
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+
     def test_deploy_script_installs_its_pinned_ansible_collection(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -376,6 +388,7 @@ class ActionPackageContractTest(unittest.TestCase):
         for playbook in (
             "app-blue-green.yml",
             "mcp-blue-green.yml",
+            "scraper-scheduler-blue-green.yml",
             "backup-now.yml",
         ):
             with self.subTest(playbook=playbook):
@@ -784,7 +797,7 @@ class ActionPackageContractTest(unittest.TestCase):
         backup_inventory = script[script.index('if target == "ford-mcp":'):script.index('extra_vars = {')]
         self.assertIn('os.environ["OCI_BACKUP_HOST"]', backup_inventory)
         self.assertIn('os.environ.get("OCI_BACKUP_USER") or os.environ["OCI_DEPLOY_USER"]', backup_inventory)
-        self.assertIn('if target in ("ford-service", "ford-mcp") and operation == "deploy":', backup_inventory)
+        self.assertIn('if target in ("ford-service", "ford-mcp", "ford-scraper-scheduler") and operation == "deploy":', backup_inventory)
         self.assertIn('if [[ "$OCI_TARGET" == "ford-service" && -n "${OCI_BACKUP_SSH_PRIVATE_KEY:-}" ]]; then', script)
         self.assertIn('backup_key="$TEMP_ROOT/ssh/backup_key"', script)
 

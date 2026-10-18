@@ -1,0 +1,213 @@
+---
+- name: Validate scheduler release request
+  ansible.builtin.assert:
+    that:
+      - scheduler_operation | default('deploy') in ['deploy', 'rollback']
+      - scheduler_operation | default('deploy') == 'rollback' or scheduler_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+      - (remote_root ~ '/mcp/.env') is file
+    fail_msg: "Scraper scheduler release requires an immutable image and the provisioned data-host environment."
+
+- name: Read prior scheduler release state
+  ansible.builtin.stat:
+    path: "{{ remote_root }}/mcp/scheduler-release.json"
+  register: scheduler_state_file
+
+- name: Load prior scheduler release state
+  ansible.builtin.slurp:
+    src: "{{ remote_root }}/mcp/scheduler-release.json"
+  register: scheduler_state_raw
+  when: scheduler_state_file.stat.exists
+
+- name: Inspect the scheduler container for its current image
+  ansible.builtin.command:
+    cmd: docker inspect --format {% raw %}'{{range .RepoDigests}}{{println .}}{{end}}'{% endraw %} ford-scraping-scheduler
+  register: scheduler_container_image
+  changed_when: false
+  failed_when: false
+
+- name: Resolve current and candidate scheduler images
+  ansible.builtin.set_fact:
+    scheduler_state: "{{ (scheduler_state_raw.content | b64decode | from_json) if scheduler_state_file.stat.exists else {} }}"
+    scheduler_current_image: "{{ (scheduler_state_raw.content | b64decode | from_json).active_image if scheduler_state_file.stat.exists else (scheduler_container_image.stdout_lines[0] | default('')) }}"
+
+- name: Validate scheduler rollback state
+  ansible.builtin.assert:
+    that:
+      - scheduler_operation | default('deploy') != 'rollback' or (scheduler_state_file.stat.exists and scheduler_state.previous_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
+      - scheduler_current_image | length == 0 or scheduler_current_image is match('^ghcr[.]io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+    fail_msg: "Scheduler rollback requires a recorded prior immutable image."
+
+- name: Select scheduler release image
+  ansible.builtin.set_fact:
+    scheduler_candidate_image: "{{ scheduler_state.previous_image if scheduler_operation | default('deploy') == 'rollback' else scheduler_image }}"
+
+- name: Render private scheduler Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ remote_root }}/mcp/scheduler-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  no_log: true
+
+- name: Pull the immutable scheduler image with temporary GHCR credentials
+  block:
+    - name: Create temporary registry credential directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: ford-scheduler-ghcr-
+      register: scheduler_registry_config
+
+    - name: Authenticate temporarily to GHCR
+      ansible.builtin.command:
+        cmd: docker login ghcr.io --username "{{ ghcr_username }}" --password-stdin
+        stdin: "{{ lookup('ansible.builtin.env', 'GHCR_TOKEN') }}"
+      environment:
+        DOCKER_CONFIG: "{{ scheduler_registry_config.path }}"
+      changed_when: false
+      no_log: true
+
+    - name: Pull the immutable scheduler image
+      ansible.builtin.command:
+        cmd: docker pull "{{ scheduler_candidate_image }}"
+      environment:
+        DOCKER_CONFIG: "{{ scheduler_registry_config.path }}"
+      changed_when: true
+
+  always:
+    - name: Remove temporary scheduler registry credentials
+      ansible.builtin.file:
+        path: "{{ scheduler_registry_config.path }}"
+        state: absent
+      when: scheduler_registry_config.path is defined
+
+- name: Migrate the catalog using the candidate image after the verified backup
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - ford-scraper-scheduler
+      - --env-file
+      - "{{ remote_root }}/mcp/.env"
+      - -f
+      - "{{ remote_root }}/mcp/scheduler-compose.yml"
+      - run
+      - --rm
+      - scheduler
+      - node
+      - dist/src/cli.js
+      - migrate
+  when: scheduler_operation | default('deploy') == 'deploy'
+  changed_when: true
+  no_log: true
+
+- name: Replace the single active scheduler with the candidate image
+  block:
+    - name: Stop and remove the exact legacy scheduler container
+      ansible.builtin.command:
+        cmd: docker rm --force ford-scraping-scheduler
+      when: scheduler_current_image | length > 0
+      changed_when: true
+
+    - name: Start and health-check the scheduler candidate
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - ford-scraper-scheduler
+          - --env-file
+          - "{{ remote_root }}/mcp/.env"
+          - -f
+          - "{{ remote_root }}/mcp/scheduler-compose.yml"
+          - up
+          - -d
+          - --wait
+          - scheduler
+      changed_when: true
+      no_log: true
+
+    - name: Read scheduler startup log
+      ansible.builtin.command:
+        cmd: docker logs ford-scraping-scheduler
+      register: scheduler_startup_log
+      changed_when: false
+      no_log: true
+
+    - name: Verify the configured monthly scheduler is active
+      ansible.builtin.assert:
+        that:
+          - "'Scheduler active: 0 12 1 * * (America/Mexico_City)' in scheduler_startup_log.stdout"
+        fail_msg: "Scheduler container passed health but did not confirm its configured monthly schedule."
+
+    - name: Record active and previous scheduler images
+      ansible.builtin.copy:
+        dest: "{{ remote_root }}/mcp/scheduler-release.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        content: >-
+          {{ {
+            'active_image': scheduler_candidate_image,
+            'previous_image': (scheduler_current_image if scheduler_current_image | length > 0 else none)
+          } | to_nice_json }}
+
+  rescue:
+    - name: Render previous scheduler image for rollback
+      ansible.builtin.template:
+        src: compose.yml.j2
+        dest: "{{ remote_root }}/mcp/scheduler-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0640"
+      vars:
+        scheduler_candidate_image: "{{ scheduler_current_image }}"
+      when: scheduler_current_image | length > 0
+      no_log: true
+
+    - name: Restore the previous scheduler image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - ford-scraper-scheduler
+          - --env-file
+          - "{{ remote_root }}/mcp/.env"
+          - -f
+          - "{{ remote_root }}/mcp/scheduler-compose.yml"
+          - up
+          - -d
+          - --wait
+          - scheduler
+      when: scheduler_current_image | length > 0
+      changed_when: true
+      no_log: true
+
+    - name: Leave scheduler stopped when no prior version was running
+      ansible.builtin.command:
+        cmd: docker rm --force ford-scraping-scheduler
+      when: scheduler_current_image | length == 0
+      changed_when: true
+      failed_when: false
+
+    - name: Restore prior scheduler state when present
+      ansible.builtin.copy:
+        dest: "{{ remote_root }}/mcp/scheduler-release.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        content: "{{ scheduler_state_raw.content | b64decode }}"
+      when: scheduler_state_file.stat.exists
+
+    - name: Remove incomplete scheduler state on first deployment
+      ansible.builtin.file:
+        path: "{{ remote_root }}/mcp/scheduler-release.json"
+        state: absent
+      when: not scheduler_state_file.stat.exists
+
+    - name: Report failed scheduler candidate after restoring prior service
+      ansible.builtin.fail:
+        msg: "Scheduler candidate failed its health check; the prior scheduler was restored."

@@ -1,8 +1,9 @@
 # Ford OCI deployment action
 
-Composite GitHub Action for deploying or rolling back the Ford Service and
-Ford MCP containers on their existing OCI VMs. It packages the Ansible
-playbooks it runs.
+Composite GitHub Action for deploying or rolling back the Ford Service, Ford
+MCP, and private Ford scraper scheduler on their existing OCI VMs. It packages
+the Ansible playbooks it runs, so callers do not need a checkout of a private
+repository.
 
 Callers must use a reviewed, full 40-character commit SHA and run this action
 inside their own protected production environment. Give the job only
@@ -14,14 +15,11 @@ reads Grafana and Langfuse credentials directly from OCI Vault on emme-1 using
 the VM's Instance Principal. It also requires the existing Service operator
 login email as the non-secret `operator-username` input; the action validates
 it and passes it to the runtime template instead of inventing a username.
-The Service caller must also pass the production MCP settings through
-`service-mcp-enabled`, `service-mcp-url`, and `service-mcp-access-client-id`,
-plus the MCP bearer-token and Cloudflare Access client-secret Vault OCIDs.
-MCP is required for volatile vehicle facts, so the action rejects Service
-rollouts with disabled MCP, a non-production MCP host, a missing Access client
-ID, or either missing Vault reference. The values rendered to the Service
-environment are the Vault references; secret values remain in OCI Vault and
-are resolved by the Service's OCI Vault property loader.
+The Service caller may pass catalog access through `service-catalog-tools-enabled`,
+`service-catalog-jdbc-url`, `service-catalog-username`, and
+`service-catalog-password-secret-ocid`. Catalog tools default to disabled. When
+enabled, the action requires a dedicated PostgreSQL reader URL/user and a Vault
+reference for its password; secret values remain in OCI Vault.
 For Ford Service, pass the `ui-upstream-url` input to select the Cloudflare
 Pages origin. It defaults to `https://emme-crm-ui.pages.dev`; production callers
 can set it from the `FORD_WEB_UI_UPSTREAM_URL` environment variable to preserve
@@ -48,13 +46,13 @@ steps:
       mcp-private-ip: ${{ vars.OCI_MCP_PRIVATE_IP }}
 ```
 
-Both Ford Service and Ford MCP deploys require `backup-host` so the action
-runs and verifies the existing PostgreSQL and Redis backup before applying
-release changes. Ford Service also requires `backup-ssh-private-key` because
-its backup runs on emme-2; MCP already runs on emme-2 and uses its deployment
-SSH key by default. Ford Service must pass `data-private-ip` for the existing
-emme-2 address so Ansible can render PostgreSQL and Redis endpoints; the MCP
-target continues to use `mcp-private-ip`. `operation: rollback` restores only
+Ford Service and `ford-scraper-scheduler` deploys require `backup-host` and
+`backup-ssh-private-key`. The scheduler target deploys only the private monthly
+scheduler, runs catalog migrations after the verified database backup, and
+keeps a separate prior-image rollback record. It does not start the MCP HTTP
+listener. Ford Service must pass `data-private-ip` for the existing emme-2
+address so Ansible can render PostgreSQL and Redis endpoints; the MCP target
+continues to use `mcp-private-ip`. `operation: rollback` restores only
 the previously recorded image; it does not revert database migrations. When a
 first blue-green deployment replaces a legacy container that has no registry
 digest, the action snapshots the running legacy container into a local-only
@@ -79,27 +77,8 @@ The Service proxy mounts its Nginx `conf.d` directory instead of a single
 configuration file. This lets Ansible atomically replace the active route file
 and have Nginx see it before the graceful reload; single-file bind mounts can
 remain attached to the old file after an atomic replacement.
-Also configure `FORD_MCP_ENABLED=true`,
-`FORD_MCP_URL=https://ford-mcp.emme.business`, `FORD_MCP_ACCESS_CLIENT_ID`,
-`FORD_VAULT_SECRET_OCID_FORD_MCP_TOKEN`, and
-`FORD_VAULT_SECRET_OCID_FORD_MCP_ACCESS_CLIENT_SECRET` in the protected Service
-production environment. The emme-1 Instance Principal needs `read secret-bundles`
-access to both MCP Vault secrets.
-
-Every deploy runs a read-only smoke against `https://ford-mcp.emme.business/mcp`
-from the target VM after the blue-green route switch. It initializes the
-Streamable HTTP protocol, checks the production tool list, and performs a small
-`search_vehicles` call whose successful response must include a Ford Uruapan
-model-page source URL. The bearer token and Cloudflare Access client secret
-are read from OCI Vault on that VM; the action never accepts their values, and
-Ansible hides all secret reads and authenticated HTTP responses. The Service
-deploy reuses its MCP Vault references. An MCP deploy also needs
-`mcp-public-smoke-access-client-id` and
-`mcp-public-smoke-access-client-secret-secret-ocid`, and emme-2's Instance
-Principal needs `read secret-bundles` access to the Access secret as well as the
-existing MCP bearer-token secret. If an MCP deployment's public smoke fails,
-the action runs the existing MCP blue-green rollback and fails the release;
-the Service image is left deployed if only its dependency smoke fails.
+The `ford-mcp` target remains available for an explicitly selected legacy rollback
+or maintenance operation until production resource retirement is verified.
 
 ## Local checks
 
