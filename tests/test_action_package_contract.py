@@ -36,6 +36,7 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_ACTION_VALIDATE_ONLY": "true",
                 "OCI_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
+                "OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID": "mcp-access-id.example",
                 "OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
@@ -65,6 +66,15 @@ class ActionPackageContractTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_scheduler_target_requires_the_existing_database_vault_reference(self):
+        result = self.validate_action(
+            OCI_TARGET="ford-scraper-scheduler",
+            OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ford-scraper-scheduler requires the existing PostgreSQL Vault secret reference", result.stderr)
+
     def test_scheduler_target_requires_backup_and_uses_scheduler_playbook(self):
         result = self.validate_action(
             OCI_TARGET="ford-scraper-scheduler",
@@ -92,6 +102,26 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('command: ["node", "dist/src/cli.js", "scheduler"]', compose)
         self.assertNotIn("ports:", compose)
         self.assertIn("hosts: data", playbook)
+
+    def test_scheduler_reader_is_provisioned_after_migrations_and_before_swap(self):
+        role = (ROOT / "deployment/ansible/roles/scraper_scheduler/tasks/release.yml").read_text(encoding="utf-8")
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
+        deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+        migration = role.index("Migrate the catalog using the candidate image")
+        reader_setup = role.index("Provision or repair the catalog reader role")
+        scheduler_swap = role.index("Replace the single active scheduler")
+        self.assertLess(migration, reader_setup)
+        self.assertLess(reader_setup, scheduler_swap)
+        self.assertIn("ford_catalog_reader", role)
+        self.assertIn("REVOKE ALL PRIVILEGES ON SCHEMA ford", role)
+        self.assertIn("GRANT SELECT ON ALL TABLES IN SCHEMA ford_read", role)
+        self.assertIn("ALTER DEFAULT PRIVILEGES FOR ROLE ford IN SCHEMA ford_read", role)
+        self.assertIn("has_table_privilege", role)
+        self.assertIn("no_log: true", role[role.index("Provision or repair the catalog reader role"):scheduler_swap])
+        self.assertIn("scheduler-postgres-password-secret-ocid:", action)
+        self.assertIn("OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID:", action)
+        self.assertIn('extra_vars["scheduler_postgres_password_secret_ocid"] = os.environ["OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID"]', deploy)
 
     def test_scheduler_playbook_returns_active_and_prior_images_to_the_action_runner(self):
         playbook = (ROOT / "deployment/ansible/scraper-scheduler-blue-green.yml").read_text(encoding="utf-8")
@@ -353,32 +383,38 @@ class ActionPackageContractTest(unittest.TestCase):
             "service-catalog-tools-enabled",
             "service-catalog-jdbc-url",
             "service-catalog-username",
-            "service-catalog-password-secret-ocid",
         ):
             self.assertIn(input_name, action)
         for runtime_name in (
             "FORD_CATALOG_TOOLS_ENABLED",
             "FORD_CATALOG_JDBC_URL",
             "FORD_CATALOG_USERNAME",
-            "FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD",
         ):
             self.assertIn(runtime_name, deploy + template)
         self.assertIn("FORD_CATALOG_TOOLS_ENABLED={{ (ford_catalog_tools_enabled | default(false))", template)
         self.assertIn("FORD_CATALOG_JDBC_URL={{ ford_catalog_jdbc_url | default('') }}", template)
         self.assertIn("FORD_CATALOG_USERNAME={{ ford_catalog_username | default('') }}", template)
+        self.assertNotIn("service-catalog-password-secret-ocid", action)
+        self.assertNotIn("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD", deploy + template)
         self.assertNotIn("FORD_MCP_READ_ONLY_TOOL_NAMES", template)
         self.assertNotIn("FORD_MCP_", template)
 
-    def test_enabled_catalog_tools_require_reader_url_user_and_vault_reference(self):
+    def test_enabled_catalog_tools_require_reader_url_and_user_without_a_new_secret(self):
         missing = self.validate_action(OCI_SERVICE_CATALOG_TOOLS_ENABLED="true")
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("require a PostgreSQL catalog JDBC URL", missing.stderr)
+
+        missing_username = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+        )
+        self.assertNotEqual(missing_username.returncode, 0)
+        self.assertIn("require a dedicated reader username", missing_username.stderr)
 
         configured = self.validate_action(
             OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
             OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
             OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
-            FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD="ocid1.vaultsecret.oc1.phx.example",
         )
         self.assertEqual(configured.returncode, 0, configured.stderr)
 
