@@ -151,6 +151,7 @@
         content: >-
           {{ {
             'active_image': scheduler_candidate_image,
+            'active_slot': 'scheduler',
             'previous_image': (scheduler_current_image if scheduler_current_image | length > 0 else none)
           } | to_nice_json }}
 
