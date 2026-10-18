@@ -48,11 +48,14 @@ inputs:
   mcp-private-ip:
     description: Existing MCP VM private IP used in the stable listener configuration.
     required: false
+  scheduler-postgres-password-secret-ocid:
+    description: Existing OCI Vault secret OCID for the data PostgreSQL password used by scheduler and reader-role setup.
+    required: false
   secrets-provider:
     description: Runtime secret provider used by the deployment (oci-vault).
     required: false
   postgres-password-secret-ocid:
-    description: OCI Vault secret OCID for the MCP database password.
+    description: Existing OCI Vault secret OCID for the data PostgreSQL password (MCP or scheduler target).
     required: false
   mcp-http-bearer-token-secret-ocid:
     description: OCI Vault secret OCID for the MCP HTTP bearer token.
@@ -124,9 +127,6 @@ inputs:
   service-catalog-username:
     description: Least-privilege Ford catalog reader username.
     required: false
-  service-catalog-password-secret-ocid:
-    description: OCI Vault secret OCID for the catalog reader password.
-    required: false
 runs:
   using: composite
   steps:
@@ -151,6 +151,7 @@ runs:
         OCI_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}
         FORD_SECRETS_PROVIDER: ${{ inputs['secrets-provider'] }}
         OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID: ${{ inputs['postgres-password-secret-ocid'] }}
+        OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID: ${{ inputs['scheduler-postgres-password-secret-ocid'] }}
         OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID: ${{ inputs['mcp-http-bearer-token-secret-ocid'] }}
         OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_ID: ${{ inputs['mcp-public-smoke-access-client-id'] }}
         OCI_MCP_PUBLIC_SMOKE_ACCESS_CLIENT_SECRET_SECRET_OCID: ${{ inputs['mcp-public-smoke-access-client-secret-secret-ocid'] }}
@@ -173,6 +174,5 @@ runs:
         OCI_SERVICE_CATALOG_TOOLS_ENABLED: ${{ inputs['service-catalog-tools-enabled'] }}
         OCI_SERVICE_CATALOG_JDBC_URL: ${{ inputs['service-catalog-jdbc-url'] }}
         OCI_SERVICE_CATALOG_USERNAME: ${{ inputs['service-catalog-username'] }}
-        FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD: ${{ inputs['service-catalog-password-secret-ocid'] }}
         OCI_SERVICE_SOURCE_ROOT: ${{ github.workspace }}
       run: ${{ github.action_path }}/deploy.sh

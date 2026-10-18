@@ -16,10 +16,12 @@ the VM's Instance Principal. It also requires the existing Service operator
 login email as the non-secret `operator-username` input; the action validates
 it and passes it to the runtime template instead of inventing a username.
 The Service caller may pass catalog access through `service-catalog-tools-enabled`,
-`service-catalog-jdbc-url`, `service-catalog-username`, and
-`service-catalog-password-secret-ocid`. Catalog tools default to disabled. When
-enabled, the action requires a dedicated PostgreSQL reader URL/user and a Vault
-reference for its password; secret values remain in OCI Vault.
+`service-catalog-jdbc-url`, and `service-catalog-username`. Catalog tools default
+to disabled. The protected scheduler release fetches the existing PostgreSQL
+Vault password using emme-2's Instance Principal, then provisions the dedicated
+reader role with SELECT-only grants. Ford Service reuses its existing database
+password in the JVM with that reader username; no separate catalog Vault secret
+is required.
 For Ford Service, pass the `ui-upstream-url` input to select the Cloudflare
 Pages origin. It defaults to `https://emme-crm-ui.pages.dev`; production callers
 can set it from the `FORD_WEB_UI_UPSTREAM_URL` environment variable to preserve

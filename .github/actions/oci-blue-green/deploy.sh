@@ -31,8 +31,6 @@ if [[ "$OCI_TARGET" == "ford-service" && "${OCI_SERVICE_CATALOG_TOOLS_ENABLED:-f
     || fail "enabled catalog tools require a PostgreSQL catalog JDBC URL"
   [[ "${OCI_SERVICE_CATALOG_USERNAME:-}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
     || fail "enabled catalog tools require a dedicated reader username"
-  [[ "${FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
-    || fail "enabled catalog tools require a Vault secret OCID for the reader password"
 fi
 
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
@@ -87,6 +85,8 @@ elif [[ "$OCI_TARGET" == "ford-service" ]]; then
 elif [[ "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
   [[ "${OCI_SECRETS_PROVIDER:-}" == "oci-vault" ]] \
     || fail "ford-scraper-scheduler requires OCI Vault runtime secret references"
+  [[ "${OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+    || fail "ford-scraper-scheduler requires the existing PostgreSQL Vault secret reference"
 fi
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   if [[ "$OCI_TARGET" == "ford-service" || "$OCI_TARGET" == "ford-scraper-scheduler" ]]; then
@@ -177,7 +177,6 @@ if target == "ford-service":
     extra_vars["ford_catalog_tools_enabled"] = os.environ.get("OCI_SERVICE_CATALOG_TOOLS_ENABLED", "false")
     extra_vars["ford_catalog_jdbc_url"] = os.environ.get("OCI_SERVICE_CATALOG_JDBC_URL", "")
     extra_vars["ford_catalog_username"] = os.environ.get("OCI_SERVICE_CATALOG_USERNAME", "")
-    extra_vars["ford_catalog_password_secret_ocid"] = os.environ.get("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD", "")
     extra_vars.update({
         "service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"],
         "ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"],
@@ -216,6 +215,8 @@ else:
     extra_vars["scheduler_operation"] = operation
     if os.environ["OCI_IMAGE"]:
         extra_vars["scheduler_image"] = os.environ["OCI_IMAGE"]
+    extra_vars["scheduler_postgres_password_secret_ocid"] = os.environ["OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID"]
+    extra_vars["scheduler_secrets_provider"] = os.environ["OCI_SECRETS_PROVIDER"]
     playbook = "deployment/ansible/scraper-scheduler-blue-green.yml"
 
 for path, value in ((sys.argv[1], inventory), (sys.argv[2], backup_inventory), (sys.argv[3], extra_vars)):
