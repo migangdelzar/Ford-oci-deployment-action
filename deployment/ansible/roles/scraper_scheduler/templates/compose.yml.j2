@@ -12,7 +12,13 @@ services:
         max-size: 20m
         max-file: "3"
     environment:
-      DATABASE_URL: postgres://ford:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be supplied}@postgres:5432/ford_service?application_name=ford-scraping-scheduler
+      FORD_SECRETS_PROVIDER: oci-vault
+      FORD_VAULT_SECRET_OCID_POSTGRES_PASSWORD: "{{ scheduler_postgres_password_secret_ocid }}"
+      DATABASE_HOST: postgres
+      DATABASE_USER: ford
+      DATABASE_NAME: ford_service
+      DATABASE_PORT: "5432"
+      DATABASE_APPLICATION_NAME: ford-scraping-scheduler
       FORD_BASE_URL: https://www.forduruapan.mx
       EMBEDDING_PROVIDER: ollama
       EMBEDDING_API_URL: http://ollama:11434/api/embed
