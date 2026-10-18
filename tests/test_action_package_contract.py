@@ -88,9 +88,19 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertLess(deploy.index("deployment/ansible/backup-now.yml"), deploy.index('"$PLAYBOOK"'))
         self.assertLess(role.index("Migrate the catalog"), role.index("Replace the single active scheduler"))
         self.assertIn("Restore the previous scheduler image", role)
+        self.assertIn("'active_slot': 'scheduler'", role)
         self.assertIn('command: ["node", "dist/src/cli.js", "scheduler"]', compose)
         self.assertNotIn("ports:", compose)
         self.assertIn("hosts: data", playbook)
+
+    def test_scheduler_playbook_returns_active_and_prior_images_to_the_action_runner(self):
+        playbook = (ROOT / "deployment/ansible/scraper-scheduler-blue-green.yml").read_text(encoding="utf-8")
+
+        self.assertIn("ansible.builtin.import_role:", playbook)
+        self.assertIn("tasks_from: release.yml", playbook)
+        self.assertIn("Fetch redacted scheduler release metadata", playbook)
+        self.assertIn('src: "{{ remote_root }}/mcp/scheduler-release.json"', playbook)
+        self.assertIn('dest: "{{ release_summary_path }}"', playbook)
 
     def test_service_deploy_requires_the_existing_database_private_ip(self):
         missing = self.validate_action(OCI_DATA_PRIVATE_IP="")

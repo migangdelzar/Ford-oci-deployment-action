@@ -2,6 +2,15 @@
 - name: Release the private Ford scraper scheduler
   hosts: data
   become: true
-  roles:
-    - role: scraper_scheduler
-      tasks_from: release.yml
+  tasks:
+    - name: Run private scraper scheduler release tasks
+      ansible.builtin.import_role:
+        name: scraper_scheduler
+        tasks_from: release.yml
+  post_tasks:
+    - name: Fetch redacted scheduler release metadata for the deployment summary
+      ansible.builtin.fetch:
+        src: "{{ remote_root }}/mcp/scheduler-release.json"
+        dest: "{{ release_summary_path }}"
+        flat: true
+      when: release_summary_path is defined
