@@ -1,5 +1,5 @@
 name: OCI blue-green deploy
-description: Deploy or roll back Ford Service, MCP, or scraper scheduler on its existing OCI VM.
+description: Deploy or roll back Ford Service, Ford MCP, or the private scraper scheduler on existing OCI VMs.
 inputs:
   target:
     description: Deployment target (ford-service, ford-mcp, or ford-scraper-scheduler).
@@ -24,7 +24,7 @@ inputs:
     description: SSH private key for the target VM (emme-1 for Ford Service, emme-2 for MCP).
     required: true
   backup-ssh-private-key:
-    description: Optional separate SSH private key for the existing data VM backup; MCP uses its deploy key when omitted.
+    description: Separate SSH private key for the data VM backup before Ford Service or scheduler deploys.
     required: false
   ssh-known-hosts:
     description: Pinned known_hosts entries for the deployment host and, when needed, the data VM.
@@ -40,7 +40,7 @@ inputs:
     required: false
     default: /opt/ford
   backup-host:
-    description: Existing data VM host to back up before Ford Service or MCP deploys.
+    description: Existing data VM host to back up before Ford Service or scraper scheduler; also the MCP target host.
     required: false
   backup-user:
     description: SSH user for the data VM; defaults to the deployment user.
@@ -91,22 +91,6 @@ inputs:
     required: false
   meta-whatsapp-access-token-secret-ocid:
     description: OCI Vault secret OCID for the WhatsApp delivery access token.
-    required: false
-  service-mcp-enabled:
-    description: Enable the production Ford MCP connection for Ford Service.
-    required: false
-    default: "true"
-  service-mcp-url:
-    description: HTTPS origin for the production Ford MCP service.
-    required: false
-  service-mcp-access-client-id:
-    description: Cloudflare Access service-token client ID for Ford MCP.
-    required: false
-  service-mcp-token-secret-ocid:
-    description: OCI Vault secret OCID for the Ford MCP bearer token.
-    required: false
-  service-mcp-access-client-secret-secret-ocid:
-    description: OCI Vault secret OCID for the Cloudflare Access client secret.
     required: false
   ui-upstream-url:
     description: Cloudflare Pages origin proxied by Ford Service for browser UI routes and assets.
@@ -179,11 +163,6 @@ runs:
         OCI_META_APP_SECRET_OCID: ${{ inputs['meta-app-secret-ocid'] }}
         OCI_META_VERIFY_TOKEN_OCID: ${{ inputs['meta-verify-token-ocid'] }}
         OCI_META_WHATSAPP_ACCESS_TOKEN_SECRET_OCID: ${{ inputs['meta-whatsapp-access-token-secret-ocid'] }}
-        OCI_SERVICE_MCP_ENABLED: ${{ inputs['service-mcp-enabled'] }}
-        OCI_SERVICE_MCP_URL: ${{ inputs['service-mcp-url'] }}
-        OCI_SERVICE_MCP_ACCESS_CLIENT_ID: ${{ inputs['service-mcp-access-client-id'] }}
-        OCI_SERVICE_MCP_TOKEN_SECRET_OCID: ${{ inputs['service-mcp-token-secret-ocid'] }}
-        OCI_SERVICE_MCP_ACCESS_CLIENT_SECRET_SECRET_OCID: ${{ inputs['service-mcp-access-client-secret-secret-ocid'] }}
         FORD_WEB_UI_UPSTREAM_URL: ${{ inputs['ui-upstream-url'] }}
         OCI_GRAFANA_CLOUD_OTLP_ENDPOINT: ${{ inputs['grafana-cloud-otlp-endpoint'] }}
         OCI_GRAFANA_CLOUD_INSTANCE_ID: ${{ inputs['grafana-cloud-instance-id'] }}
