@@ -60,6 +60,7 @@ class ActionPackageContractTest(unittest.TestCase):
         result = self.validate_action(
             OCI_TARGET="ford-scraper-scheduler",
             OCI_MCP_PRIVATE_IP="",
+            OCI_DATA_PRIVATE_IP="",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)

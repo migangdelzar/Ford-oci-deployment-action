@@ -154,7 +154,7 @@ host_vars = {
 }
 if target == "ford-mcp":
     host_vars["emme_2_private_ip"] = os.environ["OCI_MCP_PRIVATE_IP"]
-else:
+elif target == "ford-service":
     host_vars["emme_2_private_ip"] = os.environ["OCI_DATA_PRIVATE_IP"]
 
 inventory = {"all": {"children": {group: {"hosts": {"release-target": host_vars}}}}}
