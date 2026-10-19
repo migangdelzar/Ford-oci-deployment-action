@@ -329,6 +329,52 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("LANGFUSE_SECRET_KEY={{ langfuse_secret_key }}", template)
         self.assertNotIn("lookup('ansible.builtin.env', 'GRAFANA_CLOUD_API_TOKEN')", template)
 
+    def test_service_collector_uses_the_existing_blue_green_compose_project(self):
+        tasks = yaml.safe_load(
+            (
+                ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+            ).read_text(encoding="utf-8")
+        )
+
+        for task_name in (
+            "Restart the Collector with current Vault-backed credentials",
+            "List active Collector services",
+        ):
+            with self.subTest(task=task_name):
+                task = next(task for task in tasks if task.get("name") == task_name)
+                command = task["ansible.builtin.command"]["cmd"]
+                self.assertIn("--project-name ford-service", command)
+                self.assertIn('"{{ remote_root }}/app/compose.yml"', command)
+                self.assertNotIn("--project-name app", command)
+
+        cleanup = next(
+            task
+            for task in tasks
+            if task.get("name") == "Find incomplete app-project Collector containers"
+        )
+        cleanup_command = cleanup["ansible.builtin.command"]["cmd"]
+        self.assertIn("label=com.docker.compose.project=app", cleanup_command)
+        self.assertIn("label=com.docker.compose.service=otel-collector", cleanup_command)
+        self.assertIn("status=created", cleanup_command)
+        remove = next(
+            task
+            for task in tasks
+            if task.get("name") == "Remove incomplete app-project Collector containers"
+        )
+        self.assertEqual(
+            ["docker", "rm", "{{ item }}"],
+            remove["ansible.builtin.command"]["argv"],
+        )
+        self.assertEqual("{{ app_incomplete_collector_ids.stdout_lines }}", remove["loop"])
+        restart_index = next(
+            index
+            for index, task in enumerate(tasks)
+            if task.get("name")
+            == "Restart the Collector with current Vault-backed credentials"
+        )
+        self.assertLess(tasks.index(cleanup), restart_index)
+        self.assertLess(tasks.index(remove), restart_index)
+
     def test_mcp_deploy_requires_oci_vault_runtime_secrets(self):
         result = self.validate_action(
             OCI_TARGET="ford-mcp",

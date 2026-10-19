@@ -116,6 +116,25 @@
     cmd: docker network inspect app_default
   changed_when: false
 
+- name: Find incomplete app-project Collector containers
+  ansible.builtin.command:
+    cmd: >-
+      docker ps -aq
+      --filter label=com.docker.compose.project=app
+      --filter label=com.docker.compose.service=otel-collector
+      --filter status=created
+  register: app_incomplete_collector_ids
+  changed_when: false
+
+- name: Remove incomplete app-project Collector containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - rm
+      - "{{ item }}"
+  loop: "{{ app_incomplete_collector_ids.stdout_lines }}"
+  changed_when: true
+
 - name: Require the configured Collector Compose file
   ansible.builtin.stat:
     path: "{{ remote_root }}/app/compose.yml"
@@ -129,7 +148,7 @@
 - name: Restart the Collector with current Vault-backed credentials
   ansible.builtin.command:
     cmd: >-
-      docker compose --project-name app
+      docker compose --project-name ford-service
       --env-file "{{ remote_root }}/app/.env"
       -f "{{ remote_root }}/app/compose.yml"
       up -d --force-recreate otel-collector
@@ -138,7 +157,7 @@
 - name: List active Collector services
   ansible.builtin.command:
     cmd: >-
-      docker compose --project-name app
+      docker compose --project-name ford-service
       --env-file "{{ remote_root }}/app/.env"
       -f "{{ remote_root }}/app/compose.yml"
       ps --services --filter status=running
@@ -521,4 +540,3 @@
         - name: Fail deployment after automatic Ford Service route restoration
           ansible.builtin.fail:
             msg: "Ford Service deployment failed: candidate_image={{ app_candidate_image }} prior_image={{ app_previous_image if app_previous_slot | length > 0 else 'none' }} rollback_result=prior_route_health_verified."
-
