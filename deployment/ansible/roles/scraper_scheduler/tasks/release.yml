@@ -124,16 +124,6 @@
   no_log: true
   when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
 
-- name: Render a mode-0600 scheduler-only environment file
-  ansible.builtin.template:
-    src: scheduler.env.j2
-    dest: "{{ remote_root }}/mcp/scheduler.env"
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: "0600"
-  no_log: true
-  when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
-
 - name: Migrate the catalog using the candidate image after the verified backup
   ansible.builtin.command:
     argv:
@@ -141,8 +131,6 @@
       - compose
       - --project-name
       - ford-scraper-scheduler
-      - --env-file
-      - "{{ remote_root }}/mcp/scheduler.env"
       - -f
       - "{{ remote_root }}/mcp/scheduler-compose.yml"
       - run
@@ -161,6 +149,8 @@
       - docker
       - exec
       - --interactive
+      - --env
+      - CATALOG_READER_PASSWORD
       - --user
       - postgres
       - data-postgres-1
@@ -169,13 +159,12 @@
       - -q
       - -v
       - ON_ERROR_STOP=1
-      - --set
-      - "catalog_reader_password={{ scheduler_database_password }}"
       - --username
       - postgres
       - --dbname
       - ford_service
     stdin: |
+      \getenv catalog_reader_password CATALOG_READER_PASSWORD
       BEGIN;
       SELECT format(
         'CREATE ROLE ford_catalog_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD %L',
@@ -215,6 +204,8 @@
         GRANT SELECT ON TABLES TO ford_catalog_reader;
       ALTER ROLE ford_catalog_reader SET default_transaction_read_only = on;
       COMMIT;
+  environment:
+    CATALOG_READER_PASSWORD: "{{ scheduler_database_password }}"
   register: catalog_reader_setup
   changed_when: true
   no_log: true
@@ -269,6 +260,46 @@
     fail_msg: "Catalog reader must query versioned views while writes and base-schema access remain denied."
   when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
 
+- name: Verify catalog reader login and read-only query
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - --interactive
+      - --env
+      - PGPASSWORD
+      - --user
+      - postgres
+      - data-postgres-1
+      - psql
+      - -X
+      - -q
+      - -v
+      - ON_ERROR_STOP=1
+      - -A
+      - -t
+      - -h
+      - 127.0.0.1
+      - --username
+      - ford_catalog_reader
+      - --dbname
+      - ford_service
+    stdin: SELECT count(*) FROM ford_read.vehicle_search_v1;
+  environment:
+    PGPASSWORD: "{{ scheduler_database_password }}"
+  register: catalog_reader_login
+  changed_when: false
+  no_log: true
+  when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
+
+- name: Require the catalog reader login to query the view
+  ansible.builtin.assert:
+    that:
+      - catalog_reader_login.stdout | trim is match('^[0-9]+$')
+    fail_msg: "The catalog reader login could not query ford_read.vehicle_search_v1."
+  no_log: true
+  when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
+
 - name: Replace the single active scheduler with the candidate image
   block:
     - name: Stop and remove the exact legacy scheduler container
@@ -284,8 +315,6 @@
           - compose
           - --project-name
           - ford-scraper-scheduler
-          - --env-file
-          - "{{ remote_root }}/mcp/scheduler.env"
           - -f
           - "{{ remote_root }}/mcp/scheduler-compose.yml"
           - up
@@ -341,8 +370,6 @@
           - compose
           - --project-name
           - ford-scraper-scheduler
-          - --env-file
-          - "{{ remote_root }}/mcp/scheduler.env"
           - -f
           - "{{ remote_root }}/mcp/scheduler-compose.yml"
           - up
