@@ -452,6 +452,18 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("ford-mcp deploy requires OCI Vault credentials for the public endpoint smoke check", missing.stderr)
 
+    def test_public_mcp_smoke_runs_only_for_mcp_deployments(self):
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        smoke_invocation = script.index("deployment/ansible/mcp-public-smoke.yml")
+        mcp_deploy_guard = script.rfind(
+            'if [[ "$OCI_OPERATION" == "deploy" && "$OCI_TARGET" == "ford-mcp" ]]; then',
+            0,
+            smoke_invocation,
+        )
+
+        self.assertGreater(mcp_deploy_guard, 0)
+        self.assertLess(mcp_deploy_guard, smoke_invocation)
+
     def test_mcp_vault_secret_references_reach_the_remote_role_without_values(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(

@@ -266,7 +266,7 @@ if ! "$TEMP_ROOT/venv/bin/ansible-playbook" \
   exit 1
 fi
 
-if [[ "$OCI_OPERATION" == "deploy" ]]; then
+if [[ "$OCI_OPERATION" == "deploy" && "$OCI_TARGET" == "ford-mcp" ]]; then
   if ! "$TEMP_ROOT/venv/bin/ansible-playbook" \
     -i "$TEMP_ROOT/inventory.json" \
     --private-key "$TEMP_ROOT/ssh/deploy_key" \
