@@ -12,6 +12,7 @@ services:
         max-size: 20m
         max-file: "3"
     environment:
+      NODE_OPTIONS: --no-experimental-fetch
       FORD_SECRETS_PROVIDER: oci-vault
       FORD_VAULT_SECRET_OCID_POSTGRES_PASSWORD: "{{ scheduler_postgres_password_secret_ocid }}"
       DATABASE_HOST: postgres

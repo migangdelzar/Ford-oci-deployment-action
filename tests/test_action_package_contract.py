@@ -102,6 +102,7 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn('command: ["node", "dist/src/cli.js", "scheduler"]', compose)
         self.assertIn("FORD_SECRETS_PROVIDER: oci-vault", compose)
         self.assertIn('FORD_VAULT_SECRET_OCID_POSTGRES_PASSWORD: "{{ scheduler_postgres_password_secret_ocid }}"', compose)
+        self.assertIn("NODE_OPTIONS: --no-experimental-fetch", compose)
         self.assertIn("DATABASE_HOST: postgres", compose)
         self.assertNotIn("DATABASE_URL:", compose)
         self.assertNotIn("ports:", compose)
