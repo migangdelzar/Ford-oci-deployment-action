@@ -1,4 +1,18 @@
 services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    env_file: [collector.env]
+    environment:
+      OTEL_DEPLOYMENT_ENVIRONMENT: production
+    ports:
+      - "127.0.0.1:13133:13133"
+    volumes:
+      - ./grafana-cloud-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - {{ docker_container_logs_path }}:/var/lib/docker/containers:ro
+    networks: [app_default]
+
   ford-service-blue:
     image: {{ app_image if app_candidate_slot == 'blue' else app_compose_previous_image }}
     container_name: ford-service-blue

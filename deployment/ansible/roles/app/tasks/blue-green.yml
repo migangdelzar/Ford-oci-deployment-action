@@ -116,6 +116,29 @@
     cmd: docker network inspect app_default
   changed_when: false
 
+- name: Detect Docker data directory for Collector log access
+  ansible.builtin.command:
+    cmd: docker info --format {% raw %}'{{.DockerRootDir}}'{% endraw %}
+  register: app_docker_root_dir
+  changed_when: false
+
+- name: Set Docker container log directory for Collector
+  ansible.builtin.set_fact:
+    docker_container_logs_path: "{{ app_docker_root_dir.stdout | trim }}/containers"
+
+- name: Render blue-green Ford Service Compose file
+  ansible.builtin.template:
+    src: blue-green-compose.yml.j2
+    dest: "{{ remote_root }}/app/blue-green-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0640"
+  vars:
+    app_image: "{{ app_candidate_image }}"
+    app_compose_previous_image: "{{ app_previous_image if app_previous_image | length > 0 else app_candidate_image }}"
+    app_blue_port: "{{ app_blue_port_resolved }}"
+    app_green_port: "{{ app_green_port_resolved }}"
+
 - name: Find incomplete app-project Collector containers
   ansible.builtin.command:
     cmd: >-
@@ -137,7 +160,7 @@
 
 - name: Require the configured Collector Compose file
   ansible.builtin.stat:
-    path: "{{ remote_root }}/app/compose.yml"
+    path: "{{ remote_root }}/app/blue-green-compose.yml"
   register: app_collector_compose_file
 
 - name: Confirm the Collector deployment is provisioned
@@ -150,7 +173,7 @@
     cmd: >-
       docker compose --project-name ford-service
       --env-file "{{ remote_root }}/app/.env"
-      -f "{{ remote_root }}/app/compose.yml"
+      -f "{{ remote_root }}/app/blue-green-compose.yml"
       up -d --force-recreate otel-collector
   changed_when: true
 
@@ -159,7 +182,7 @@
     cmd: >-
       docker compose --project-name ford-service
       --env-file "{{ remote_root }}/app/.env"
-      -f "{{ remote_root }}/app/compose.yml"
+      -f "{{ remote_root }}/app/blue-green-compose.yml"
       ps --services --filter status=running
   register: app_collector_services
   changed_when: false
@@ -168,19 +191,6 @@
   ansible.builtin.assert:
     that: ["'otel-collector' in app_collector_services.stdout_lines"]
     fail_msg: "The OpenTelemetry Collector did not start with its verified configuration."
-
-- name: Render blue-green Ford Service Compose file
-  ansible.builtin.template:
-    src: blue-green-compose.yml.j2
-    dest: "{{ remote_root }}/app/blue-green-compose.yml"
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: "0640"
-  vars:
-    app_image: "{{ app_candidate_image }}"
-    app_compose_previous_image: "{{ app_previous_image if app_previous_image | length > 0 else app_candidate_image }}"
-    app_blue_port: "{{ app_blue_port_resolved }}"
-    app_green_port: "{{ app_green_port_resolved }}"
 
 - name: Create Nginx config directory for stable route
   ansible.builtin.file:
