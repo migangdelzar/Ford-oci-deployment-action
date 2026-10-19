@@ -344,7 +344,9 @@ class ActionPackageContractTest(unittest.TestCase):
                 task = next(task for task in tasks if task.get("name") == task_name)
                 command = task["ansible.builtin.command"]["cmd"]
                 self.assertIn("--project-name ford-service", command)
-                self.assertIn('"{{ remote_root }}/app/compose.yml"', command)
+                self.assertIn(
+                    '"{{ remote_root }}/app/blue-green-compose.yml"', command
+                )
                 self.assertNotIn("--project-name app", command)
 
         cleanup = next(
@@ -374,6 +376,57 @@ class ActionPackageContractTest(unittest.TestCase):
         )
         self.assertLess(tasks.index(cleanup), restart_index)
         self.assertLess(tasks.index(remove), restart_index)
+
+    def test_blue_green_collector_preserves_the_service_shared_network(self):
+        template_source = (
+            ROOT
+            / "deployment/ansible/roles/app/templates/blue-green-compose.yml.j2"
+        ).read_text(encoding="utf-8")
+        rendered = jinja2.Environment().from_string(template_source).render(
+            app_image="ghcr.io/example/ford-service@sha256:" + "a" * 64,
+            app_candidate_slot="blue",
+            app_compose_previous_image=(
+                "ghcr.io/example/ford-service@sha256:" + "b" * 64
+            ),
+            app_blue_port=18081,
+            app_green_port=18082,
+            docker_container_logs_path="/var/lib/docker/containers",
+        )
+        compose = yaml.safe_load(rendered)
+        collector = compose["services"]["otel-collector"]
+
+        self.assertEqual(
+            "otel/opentelemetry-collector-contrib:0.161.0",
+            collector["image"],
+        )
+        self.assertEqual(["collector.env"], collector["env_file"])
+        self.assertEqual(["127.0.0.1:13133:13133"], collector["ports"])
+        self.assertEqual(["app_default"], collector["networks"])
+        self.assertIn(
+            "/var/lib/docker/containers:/var/lib/docker/containers:ro",
+            collector["volumes"],
+        )
+        self.assertTrue(compose["networks"]["app_default"]["external"])
+
+    def test_blue_green_compose_is_rendered_before_the_collector_restart(self):
+        tasks = yaml.safe_load(
+            (
+                ROOT / "deployment/ansible/roles/app/tasks/blue-green.yml"
+            ).read_text(encoding="utf-8")
+        )
+        task_indexes = {
+            task.get("name"): index for index, task in enumerate(tasks)
+        }
+
+        docker_root = "Detect Docker data directory for Collector log access"
+        render_compose = "Render blue-green Ford Service Compose file"
+        restart_collector = (
+            "Restart the Collector with current Vault-backed credentials"
+        )
+        for task_name in (docker_root, render_compose, restart_collector):
+            self.assertIn(task_name, task_indexes)
+        self.assertLess(task_indexes[docker_root], task_indexes[render_compose])
+        self.assertLess(task_indexes[render_compose], task_indexes[restart_collector])
 
     def test_mcp_deploy_requires_oci_vault_runtime_secrets(self):
         result = self.validate_action(
