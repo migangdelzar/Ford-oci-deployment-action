@@ -124,6 +124,39 @@
   no_log: true
   when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
 
+- name: Check OCI Vault endpoint connectivity from the candidate scheduler container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - ford-scraper-scheduler
+      - -f
+      - "{{ remote_root }}/mcp/scheduler-compose.yml"
+      - run
+      - --rm
+      - --no-deps
+      - scheduler
+      - node
+      - --input-type=module
+      - -e
+      - >-
+        const metadata = await fetch('http://169.254.169.254/opc/v2/instance/region',
+        {headers: {authorization: 'Bearer Oracle'}, signal: AbortSignal.timeout(8000)});
+        console.log('OCI instance metadata: HTTP ' + metadata.status);
+        if (metadata.status !== 200) process.exitCode = 1;
+        try {
+          const auth = await fetch('https://auth.us-ashburn-1.oraclecloud.com',
+          {signal: AbortSignal.timeout(8000)});
+          console.log('OCI auth federation endpoint: HTTP ' + auth.status);
+        } catch (error) {
+          const code = error?.cause?.code || error?.name || 'network-error';
+          console.error('OCI auth federation endpoint: ' + code);
+          process.exitCode = 1;
+        }
+  changed_when: false
+  when: scheduler_operation | default('deploy') in ['deploy', 'rollback']
+
 - name: Migrate the catalog using the candidate image after the verified backup
   ansible.builtin.command:
     argv:
