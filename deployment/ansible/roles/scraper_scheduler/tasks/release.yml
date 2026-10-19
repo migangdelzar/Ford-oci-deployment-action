@@ -146,8 +146,9 @@
         console.log('OCI instance metadata: HTTP ' + metadata.status);
         if (metadata.status !== 200) process.exitCode = 1;
         try {
-          const auth = await fetch('https://auth.us-ashburn-1.oraclecloud.com',
-          {signal: AbortSignal.timeout(8000)});
+          const auth = await fetch('https://auth.us-ashburn-1.oraclecloud.com/v1/x509',
+          {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}',
+          signal: AbortSignal.timeout(8000)});
           console.log('OCI auth federation endpoint: HTTP ' + auth.status);
         } catch (error) {
           const code = error?.cause?.code || error?.name || 'network-error';
