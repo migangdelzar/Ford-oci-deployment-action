@@ -155,7 +155,9 @@ class ActionPackageContractTest(unittest.TestCase):
 
         self.assertLess(network_check, migration)
         self.assertIn("169.254.169.254/opc/v2/instance/region", network_check_block)
-        self.assertIn("auth.us-ashburn-1.oraclecloud.com", network_check_block)
+        self.assertIn("auth.us-ashburn-1.oraclecloud.com/v1/x509", network_check_block)
+        self.assertIn("method: 'POST'", network_check_block)
+        self.assertIn("body: '{}'", network_check_block)
         self.assertNotIn("scheduler_database_password", network_check_block)
         self.assertNotIn("no_log: true", network_check_block)
 
