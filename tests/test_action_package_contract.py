@@ -137,6 +137,16 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID:", action)
         self.assertIn('extra_vars["scheduler_postgres_password_secret_ocid"] = os.environ["OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID"]', deploy)
 
+    def test_scheduler_migration_failures_are_not_suppressed_or_secret_bearing(self):
+        role = (ROOT / "deployment/ansible/roles/scraper_scheduler/tasks/release.yml").read_text(encoding="utf-8")
+        migration = role.index("Migrate the catalog using the candidate image")
+        reader_setup = role.index("Provision or repair the catalog reader role")
+        migration_block = role[migration:reader_setup]
+
+        self.assertNotIn("no_log: true", migration_block)
+        self.assertNotIn("scheduler_database_password", migration_block)
+        self.assertIn("scheduler-compose.yml", migration_block)
+
     def test_scheduler_playbook_returns_active_and_prior_images_to_the_action_runner(self):
         playbook = (ROOT / "deployment/ansible/scraper-scheduler-blue-green.yml").read_text(encoding="utf-8")
 
