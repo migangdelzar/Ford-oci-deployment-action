@@ -141,7 +141,6 @@
       - migrate
   when: scheduler_operation | default('deploy') == 'deploy'
   changed_when: true
-  no_log: true
 
 - name: Provision or repair the catalog reader role
   ansible.builtin.command:
