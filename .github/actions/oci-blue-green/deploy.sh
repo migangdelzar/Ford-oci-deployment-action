@@ -40,6 +40,8 @@ if [[ "$OCI_TARGET" == "ford-service" ]]; then
   if [[ "$customer_memory_enabled" == "true" ]]; then
     [[ "${FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
       || fail "enabled customer memory requires the HMAC Vault secret reference"
+    [[ "${FORD_CUSTOMER_MEMORY_HMAC_KEY_VERSION:-}" =~ ^[1-9][0-9]*$ ]] \
+      || fail "enabled customer memory requires a positive HMAC key version"
   fi
 fi
 
