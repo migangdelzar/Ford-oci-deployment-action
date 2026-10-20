@@ -134,6 +134,10 @@ inputs:
   customer-memory-vault-secret-ocid:
     description: OCI Vault secret OCID for the customer-memory HMAC key.
     required: false
+  customer-memory-key-version:
+    description: Positive integer version of the customer-memory HMAC key.
+    required: false
+    default: "1"
 runs:
   using: composite
   steps:
@@ -183,5 +187,6 @@ runs:
         OCI_SERVICE_CATALOG_USERNAME: ${{ inputs['service-catalog-username'] }}
         FORD_CUSTOMER_MEMORY_ENABLED: ${{ inputs['customer-memory-enabled'] }}
         FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY: ${{ inputs['customer-memory-vault-secret-ocid'] }}
+        FORD_CUSTOMER_MEMORY_HMAC_KEY_VERSION: ${{ inputs['customer-memory-key-version'] }}
         OCI_SERVICE_SOURCE_ROOT: ${{ github.workspace }}
       run: ${{ github.action_path }}/deploy.sh
