@@ -524,6 +524,47 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertNotIn("BACKUP-PRIVATE-KEY-SHOULD-NOT-LEAK", output)
         self.assertNotIn("REGISTRY-TOKEN-SHOULD-NOT-LEAK", output)
 
+    def test_service_action_exposes_customer_memory_wiring_disabled_by_default(self):
+        action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
+        template = (ROOT / "deployment/ansible/roles/app/templates/app.env.j2").read_text(encoding="utf-8")
+
+        for input_name in (
+            "customer-memory-enabled",
+            "customer-memory-vault-secret-ocid",
+        ):
+            self.assertIn(input_name, action)
+        self.assertIn("FORD_CUSTOMER_MEMORY_ENABLED: ${{ inputs['customer-memory-enabled'] }}", action)
+        self.assertIn(
+            "FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY: "
+            "${{ inputs['customer-memory-vault-secret-ocid'] }}",
+            action,
+        )
+        self.assertIn(
+            "FORD_CUSTOMER_MEMORY_ENABLED={{ lookup('ansible.builtin.env', "
+            "'FORD_CUSTOMER_MEMORY_ENABLED') | default('false', true)",
+            template,
+        )
+        self.assertIn(
+            "FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY={{ lookup("
+            "'ansible.builtin.env', 'FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY')",
+            template,
+        )
+
+    def test_customer_memory_requires_a_vault_reference_when_enabled(self):
+        missing = self.validate_action(FORD_CUSTOMER_MEMORY_ENABLED="true")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("enabled customer memory requires the HMAC Vault secret reference", missing.stderr)
+
+        invalid = self.validate_action(FORD_CUSTOMER_MEMORY_ENABLED="yes")
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("customer-memory flag must be true or false", invalid.stderr)
+
+        configured = self.validate_action(
+            FORD_CUSTOMER_MEMORY_ENABLED="true",
+            FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY="ocid1.vaultsecret.oc1.example",
+        )
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+
     def test_service_action_exposes_separate_read_only_catalog_runtime_settings(self):
         action = (ROOT / ".github/actions/oci-blue-green/action.yml").read_text(encoding="utf-8")
         deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")

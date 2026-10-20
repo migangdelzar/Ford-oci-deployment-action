@@ -33,6 +33,16 @@ if [[ "$OCI_TARGET" == "ford-service" && "${OCI_SERVICE_CATALOG_TOOLS_ENABLED:-f
     || fail "enabled catalog tools require a dedicated reader username"
 fi
 
+if [[ "$OCI_TARGET" == "ford-service" ]]; then
+  customer_memory_enabled="${FORD_CUSTOMER_MEMORY_ENABLED:-false}"
+  [[ "$customer_memory_enabled" == "true" || "$customer_memory_enabled" == "false" ]] \
+    || fail "Ford Service customer-memory flag must be true or false"
+  if [[ "$customer_memory_enabled" == "true" ]]; then
+    [[ "${FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9.]+$ ]] \
+      || fail "enabled customer memory requires the HMAC Vault secret reference"
+  fi
+fi
+
 if [[ "$OCI_OPERATION" == "deploy" ]]; then
   [[ "$OCI_IMAGE" =~ ^ghcr\.io/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] \
     || fail "deploy requires an immutable GHCR image digest"
