@@ -127,6 +127,9 @@ inputs:
   service-catalog-username:
     description: Least-privilege Ford catalog reader username.
     required: false
+  service-catalog-password-secret-ocid:
+    description: OCI Vault secret OCID for the Ford catalog reader password.
+    required: false
   customer-memory-enabled:
     description: Enable advisor customer memory; keep disabled until Vault, identity audit, and replay gates pass.
     required: false
@@ -185,6 +188,7 @@ runs:
         OCI_SERVICE_CATALOG_TOOLS_ENABLED: ${{ inputs['service-catalog-tools-enabled'] }}
         OCI_SERVICE_CATALOG_JDBC_URL: ${{ inputs['service-catalog-jdbc-url'] }}
         OCI_SERVICE_CATALOG_USERNAME: ${{ inputs['service-catalog-username'] }}
+        OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID: ${{ inputs['service-catalog-password-secret-ocid'] }}
         FORD_CUSTOMER_MEMORY_ENABLED: ${{ inputs['customer-memory-enabled'] }}
         FORD_VAULT_SECRET_OCID_FORD_CUSTOMER_MEMORY_HMAC_KEY: ${{ inputs['customer-memory-vault-secret-ocid'] }}
         FORD_CUSTOMER_MEMORY_HMAC_KEY_VERSION: ${{ inputs['customer-memory-key-version'] }}

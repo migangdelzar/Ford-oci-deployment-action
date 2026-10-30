@@ -35,6 +35,7 @@ class ActionPackageContractTest(unittest.TestCase):
                 "OCI_OPERATOR_USERNAME": "operator@example.test",
                 "OCI_ACTION_VALIDATE_ONLY": "true",
                 "OCI_SECRETS_PROVIDER": "oci-vault",
+                "FORD_SECRETS_PROVIDER": "oci-vault",
                 "OCI_MCP_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_SCHEDULER_POSTGRES_PASSWORD_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
                 "OCI_MCP_HTTP_BEARER_TOKEN_SECRET_OCID": "ocid1.vaultsecret.oc1.example",
@@ -611,8 +612,15 @@ class ActionPackageContractTest(unittest.TestCase):
         self.assertIn("FORD_CATALOG_TOOLS_ENABLED={{ (ford_catalog_tools_enabled | default(false))", template)
         self.assertIn("FORD_CATALOG_JDBC_URL={{ ford_catalog_jdbc_url | default('') }}", template)
         self.assertIn("FORD_CATALOG_USERNAME={{ ford_catalog_username | default('') }}", template)
-        self.assertNotIn("service-catalog-password-secret-ocid", action)
-        self.assertNotIn("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD", deploy + template)
+        self.assertIn("service-catalog-password-secret-ocid:", action)
+        self.assertIn(
+            "OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID: ${{ inputs['service-catalog-password-secret-ocid'] }}",
+            action,
+        )
+        self.assertIn('extra_vars["ford_catalog_password_secret_ocid"] = os.environ["OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID"]', deploy)
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD={{ ford_catalog_password_secret_ocid | default('') }}", template)
+        self.assertNotIn("service-catalog-password:", action)
+        self.assertNotIn("\nFORD_CATALOG_PASSWORD=", deploy + template)
         self.assertNotIn("FORD_MCP_READ_ONLY_TOOL_NAMES", template)
         self.assertNotIn("FORD_MCP_", template)
 
@@ -632,8 +640,61 @@ class ActionPackageContractTest(unittest.TestCase):
             OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
             OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
             OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+            OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID="ocid1.vaultsecret.oc1.catalog-reader",
         )
         self.assertEqual(configured.returncode, 0, configured.stderr)
+
+        missing_secret = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+            OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+        )
+        self.assertNotEqual(missing_secret.returncode, 0)
+        self.assertIn("enabled catalog tools require OCI Vault runtime secret references", missing_secret.stderr)
+
+        malformed_secret = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+            OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+            OCI_SECRETS_PROVIDER="environment",
+            FORD_SECRETS_PROVIDER="environment",
+            OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID="ocid1.vaultsecret.oc1.foo_bar-baz",
+        )
+        self.assertNotEqual(malformed_secret.returncode, 0)
+        self.assertIn("enabled catalog tools require OCI Vault runtime secret references", malformed_secret.stderr)
+
+        invalid_secret = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+            OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+            OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID="not-an-ocid",
+        )
+        self.assertNotEqual(invalid_secret.returncode, 0)
+        self.assertIn("enabled catalog tools require OCI Vault runtime secret references", invalid_secret.stderr)
+
+        valid_secret = self.validate_action(
+            OCI_SERVICE_CATALOG_TOOLS_ENABLED="true",
+            OCI_SERVICE_CATALOG_JDBC_URL="jdbc:postgresql://10.0.0.11:5432/ford?connectTimeout=5",
+            OCI_SERVICE_CATALOG_USERNAME="ford_catalog_reader",
+            OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID="ocid1.vaultsecret.oc1.foo_bar-baz",
+        )
+        self.assertEqual(valid_secret.returncode, 0, valid_secret.stderr)
+
+    def test_catalog_password_reference_is_rendered_without_a_password_value(self):
+        template = (ROOT / "deployment/ansible/roles/app/templates/app.env.j2").read_text(encoding="utf-8")
+        template_line = next(
+            line for line in template.splitlines()
+            if line.startswith("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD=")
+        )
+        rendered = jinja2.Environment().from_string(template_line).render(
+            ford_catalog_password_secret_ocid="ocid1.vaultsecret.oc1.foo_bar-baz"
+        )
+
+        self.assertIn("FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD", template)
+        self.assertEqual(
+            "FORD_VAULT_SECRET_OCID_FORD_CATALOG_PASSWORD=ocid1.vaultsecret.oc1.foo_bar-baz",
+            rendered,
+        )
 
     def test_deploy_script_installs_its_pinned_ansible_collection(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")

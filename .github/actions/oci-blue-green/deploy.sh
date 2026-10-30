@@ -31,6 +31,9 @@ if [[ "$OCI_TARGET" == "ford-service" && "${OCI_SERVICE_CATALOG_TOOLS_ENABLED:-f
     || fail "enabled catalog tools require a PostgreSQL catalog JDBC URL"
   [[ "${OCI_SERVICE_CATALOG_USERNAME:-}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
     || fail "enabled catalog tools require a dedicated reader username"
+  [[ "${FORD_SECRETS_PROVIDER:-}" == "oci-vault" \
+    && "${OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID:-}" =~ ^ocid1[.]vaultsecret[.][A-Za-z0-9._-]+$ ]] \
+    || fail "enabled catalog tools require OCI Vault runtime secret references"
 fi
 
 if [[ "$OCI_TARGET" == "ford-service" ]]; then
@@ -189,6 +192,7 @@ if target == "ford-service":
     extra_vars["ford_catalog_tools_enabled"] = os.environ.get("OCI_SERVICE_CATALOG_TOOLS_ENABLED", "false")
     extra_vars["ford_catalog_jdbc_url"] = os.environ.get("OCI_SERVICE_CATALOG_JDBC_URL", "")
     extra_vars["ford_catalog_username"] = os.environ.get("OCI_SERVICE_CATALOG_USERNAME", "")
+    extra_vars["ford_catalog_password_secret_ocid"] = os.environ["OCI_SERVICE_CATALOG_PASSWORD_SECRET_OCID"]
     extra_vars.update({
         "service_source_root": os.environ["OCI_SERVICE_SOURCE_ROOT"],
         "ford_operator_username": os.environ["OCI_OPERATOR_USERNAME"],
